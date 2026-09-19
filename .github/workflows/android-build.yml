@@ -315,16 +315,6 @@ jobs:
             use ieee_exceptions
             implicit none
             private
-            public :: ieee_class_type, ieee_value
-            public :: ieee_quiet_nan, ieee_signaling_nan, ieee_positive_inf
-            public :: ieee_negative_inf, ieee_positive_zero, ieee_negative_zero
-            public :: ieee_positive_denormal, ieee_negative_denormal
-            public :: ieee_positive_normal, ieee_negative_normal
-            public :: ieee_is_nan, ieee_is_finite, ieee_is_normal
-            public :: ieee_is_negative, ieee_is_positive
-            public :: ieee_unordered, ieee_class
-            public :: ieee_copy_sign, ieee_next_after, ieee_rint, ieee_scalb
-            public :: ieee_logb, ieee_rem
 
             type :: ieee_class_type
               integer :: c = 0
@@ -340,6 +330,15 @@ jobs:
             type(ieee_class_type), parameter :: ieee_negative_denormal = ieee_class_type(8)
             type(ieee_class_type), parameter :: ieee_positive_normal = ieee_class_type(9)
             type(ieee_class_type), parameter :: ieee_negative_normal = ieee_class_type(10)
+
+            public :: ieee_class_type, ieee_value
+            public :: ieee_quiet_nan, ieee_signaling_nan, ieee_positive_inf
+            public :: ieee_negative_inf, ieee_positive_zero, ieee_negative_zero
+            public :: ieee_positive_denormal, ieee_negative_denormal
+            public :: ieee_positive_normal, ieee_negative_normal
+            public :: ieee_is_nan, ieee_is_finite, ieee_is_normal
+            public :: ieee_is_negative, ieee_is_positive
+            public :: ieee_unordered
 
             interface ieee_value
               module procedure ieee_value_r4, ieee_value_r8
