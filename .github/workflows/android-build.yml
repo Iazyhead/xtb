@@ -504,63 +504,46 @@ jobs:
             exit 1
           }
 
-      - name: Inspect mctc-lib config setup
-        if: always()
+      - name: Patch mctc-lib to disable JSON (removes jonquil and toml-f)
         run: |
-          echo "=== mctc-lib/meson_options.txt ==="
-          cat subprojects/mctc-lib/meson_options.txt 2>/dev/null || echo "(not present)"
-          echo ""
-          echo "=== mctc-lib/config/ contents ==="
-          ls -la subprojects/mctc-lib/config/ 2>/dev/null || echo "(not present)"
-          echo ""
-          echo "=== mctc-lib/config/meson.build ==="
-          cat subprojects/mctc-lib/config/meson.build 2>/dev/null || echo "(not present)"
-          echo ""
-          echo "=== mctc-lib/src/meson.build ==="
-          cat subprojects/mctc-lib/src/meson.build 2>/dev/null || echo "(not present)"
-          echo ""
-          echo "=== mctc-lib/src/mctc/ contents ==="
-          ls -la subprojects/mctc-lib/src/mctc/ 2>/dev/null || echo "(not present)"
-          echo ""
-          echo "=== mctc-lib/src/mctc/config/ contents (if any) ==="
-          ls -la subprojects/mctc-lib/src/mctc/config/ 2>/dev/null || echo "(not present)"
-          echo ""
-          echo "=== Any 'use tomlf' inside mctc-lib/src ==="
-          grep -rn "use tomlf\|tomlf" subprojects/mctc-lib/src/ 2>/dev/null || echo "(none)"
-          echo ""
-          echo "=== Any tomlf reference in mctc-lib/config ==="
-          grep -rn "tomlf\|toml" subprojects/mctc-lib/config/ 2>/dev/null || echo "(none)"
-
-      - name: Patch toml-f for Flang compatibility
-        if: always()
-        run: |
-          F=subprojects/toml-f/src/tomlf/type/value.f90
+          F=subprojects/mctc-lib/config/meson.build
           if [ ! -f "$F" ]; then
-            echo "NOTE: $F not found — toml-f may not have been fetched this run. Skipping."
-            exit 0
+            echo "ERROR: $F not found — mctc-lib was not fetched"
+            exit 1
           fi
 
-          echo "=== Before patch ==="
-          grep -n "visit" "$F" | head -n 30
+          echo "=== Original jonquil declaration ==="
+          grep -B2 -A6 "jonquil" "$F" || echo "(no jonquil references)"
 
-          sed -i 's/type, abstract :: toml_visitor/type :: toml_visitor/' "$F"
-          sed -i 's/procedure(visit), deferred :: visit/procedure :: visit => visit_default/' "$F"
-          sed -i '0,/^contains$/s//contains\n\nsubroutine visit_default(self, val)\n  class(toml_visitor), intent(inout) :: self\n  class(toml_value), intent(inout) :: val\nend subroutine visit_default/' "$F"
-          sed -i -E 's|^([[:space:]]*)call([[:space:]]+[^!]*%visit[^!]*)$|\1! Flang workaround: dispatch disabled (was: \2)|' "$F"
+          sed -i "s|required: get_option('json'),|required: false,|" "$F"
+          sed -i "/fallback: \['jonquil','jonquil_dep'\],/d" "$F"
 
           echo ""
-          echo "=== After patch ==="
-          grep -n "visit" "$F" | head -n 30
+          echo "=== Patched jonquil declaration ==="
+          grep -B2 -A6 "jonquil" "$F" || echo "(no jonquil references — GOOD)"
+
+      - name: Reconfigure build to pick up mctc-lib patch
+        run: |
+          meson setup --reconfigure builddir || {
+            echo "=== Reconfigure failed — showing meson log ==="
+            cat builddir/meson-logs/meson-log.txt
+            exit 1
+          }
+
+      - name: Inspect mctc-lib config after patch
+        if: always()
+        run: |
+          echo "=== Patched config/meson.build ==="
+          cat subprojects/mctc-lib/config/meson.build
           echo ""
-          if grep -nE "^[[:space:]]*call[^!]*%visit" "$F"; then
-            echo "WARNING: live dispatch still present"
-          else
-            echo "OK: no live visit dispatch"
-          fi
+          echo "=== Is toml-f directory present? ==="
+          ls -la subprojects/toml-f/ 2>/dev/null | head -n 5 || echo "(not present — GOOD, we didn't fetch it)"
+          echo ""
+          echo "=== Is jonquil directory present? ==="
+          ls -la subprojects/jonquil/ 2>/dev/null | head -n 5 || echo "(not present — GOOD)"
 
       - name: Build project
-        if: always()
-        run: meson compile -C builddir || true
+        run: meson compile -C builddir
 
       - name: Find built libraries
         if: always()
