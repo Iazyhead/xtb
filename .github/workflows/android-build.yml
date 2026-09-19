@@ -455,8 +455,7 @@ jobs:
       - name: Exclude model_hessian from build
         run: |
           sed -i "/subdir('model_hessian')/ s|^|# DISABLED-MODELHESS: |" src/meson.build
-          echo "=== After: ==="
-          grep -n "model_hessian" src/meson.build
+          grep -n "model_hessian" src/meson.build || true
 
       - name: Add non_overridable EXCEPT where overridden in subclasses
         run: |
@@ -474,8 +473,6 @@ jobs:
                       if fn.endswith(EXTS):
                           all_source.append(os.path.join(dp, fn))
 
-          print(f"Scanned {len(all_source)} Fortran files")
-
           type_decl_re = re.compile(
               r"^\s*type\s*(?!\()\s*(?:,\s*[^:]+?)?\s*(?:::)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:!.*)?$",
               re.IGNORECASE)
@@ -484,24 +481,17 @@ jobs:
           simple_re = re.compile(r"^(\s*)procedure\s*::\s*(.*)$")
           attr_re = re.compile(r"^(\s*)procedure\s*,\s*([^:]+?)\s*::\s*(.*)$")
 
-          # Phase 1: Build hierarchy and binding maps.
-          # bindings[type_name] = set of binding public names
-          # parent[type_name] = parent type name (or None)
           bindings = {}
           parent = {}
-          type_locations = {}  # type_name -> (path, line_idx)
-
-          # Track bindings declared in each type definition
           for path in all_source:
               with open(path) as fh:
                   lines = fh.readlines()
               cur_t = None
-              for i, line in enumerate(lines):
+              for line in lines:
                   m = type_decl_re.match(line)
                   if cur_t is None and m:
                       cur_t = m.group(1)
                       bindings.setdefault(cur_t, set())
-                      type_locations[cur_t] = (path, i)
                       em = extends_re.search(line)
                       if em:
                           parent[cur_t] = em.group(1)
@@ -510,33 +500,19 @@ jobs:
                       cur_t = None
                       continue
                   if cur_t is not None:
-                      # Collect binding name
                       m2 = simple_re.match(line)
                       if m2:
-                          # "procedure :: name" or "procedure :: alias => target"
                           rhs = m2.group(2)
-                          if "=>" in rhs:
-                              # alias name is the LHS
-                              name = rhs.split("=>")[0].strip().split()[0]
-                          else:
-                              name = rhs.strip().split()[0]
-                          if name:
-                              bindings[cur_t].add(name.lower())
+                          name = (rhs.split("=>")[0] if "=>" in rhs else rhs).strip().split()[0].lower()
+                          if name: bindings[cur_t].add(name)
                           continue
                       m3 = attr_re.match(line)
                       if m3:
                           rhs = m3.group(3)
-                          if "=>" in rhs:
-                              name = rhs.split("=>")[0].strip().split()[0]
-                          else:
-                              name = rhs.strip().split()[0]
-                          if name:
-                              bindings[cur_t].add(name.lower())
+                          name = (rhs.split("=>")[0] if "=>" in rhs else rhs).strip().split()[0].lower()
+                          if name: bindings[cur_t].add(name)
                           continue
 
-          # Phase 2: Build the set of "overridden" binding names per type.
-          # A binding B in type T is "overridden" if any descendant of T
-          # declares a binding with the same name B.
           def descendants(t):
               result = set()
               for other, par in parent.items():
@@ -545,96 +521,94 @@ jobs:
                       result |= descendants(other)
               return result
 
-          overridden = {}  # type_name -> set of binding names that are overridden
+          overridden = {}
           for t in bindings:
               overridden[t] = set()
               for sub in descendants(t):
                   overridden[t] |= bindings[t] & bindings.get(sub, set())
 
-          # Report
           print("=== Base types with overridden bindings ===")
           for t in sorted(overridden):
               if overridden[t]:
-                  print(f"  {t}: overridden bindings = {sorted(overridden[t])}")
+                  print(f"  {t}: {sorted(overridden[t])}")
           print()
 
-          # Phase 3: Apply non_overridable where safe.
           total_added = 0
-          total_skipped = 0
           files_changed = 0
-
           for path in all_source:
               with open(path) as fh:
                   lines = fh.readlines()
               out = []
               cur_t = None
               fadd = 0
-              fskip = 0
               for line in lines:
                   m = type_decl_re.match(line)
                   if cur_t is None and m:
-                      cur_t = m.group(1)
-                      out.append(line)
-                      continue
+                      cur_t = m.group(1); out.append(line); continue
                   if cur_t is not None and end_type_re.match(line):
-                      cur_t = None
-                      out.append(line)
-                      continue
+                      cur_t = None; out.append(line); continue
                   if cur_t is not None:
-                      if re.search(r",\s*deferred\b", line, re.IGNORECASE):
-                          out.append(line)
-                          continue
-                      if re.search(r"\bnopass\b", line, re.IGNORECASE):
-                          out.append(line)
-                          continue
-                      if re.search(r"\bnon_overridable\b", line, re.IGNORECASE):
-                          out.append(line)
-                          continue
+                      if re.search(r",\s*deferred\b", line, re.IGNORECASE): out.append(line); continue
+                      if re.search(r"\bnopass\b", line, re.IGNORECASE): out.append(line); continue
+                      if re.search(r"\bnon_overridable\b", line, re.IGNORECASE): out.append(line); continue
 
-                      def get_name_from_rhs(rhs):
-                          if "=>" in rhs:
-                              return rhs.split("=>")[0].strip().split()[0].lower()
-                          return rhs.strip().split()[0].lower()
+                      def name_of(rhs):
+                          return (rhs.split("=>")[0] if "=>" in rhs else rhs).strip().split()[0].lower()
 
                       m2 = simple_re.match(line)
                       if m2:
-                          name = get_name_from_rhs(m2.group(2))
-                          if name in overridden.get(cur_t, set()):
+                          if name_of(m2.group(2)) in overridden.get(cur_t, set()):
                               out.append(line)
-                              fskip += 1
                           else:
                               out.append(m2.group(1) + "procedure, non_overridable :: " + m2.group(2) + "\n")
                               fadd += 1
                           continue
-
                       m3 = attr_re.match(line)
                       if m3:
-                          name = get_name_from_rhs(m3.group(3))
-                          if name in overridden.get(cur_t, set()):
+                          if name_of(m3.group(3)) in overridden.get(cur_t, set()):
                               out.append(line)
-                              fskip += 1
                           else:
-                              attrs = m3.group(2).strip()
-                              out.append(m3.group(1) + "procedure, " + attrs + ", non_overridable :: " + m3.group(3) + "\n")
+                              out.append(m3.group(1) + "procedure, " + m3.group(2).strip() + ", non_overridable :: " + m3.group(3) + "\n")
                               fadd += 1
                           continue
-
                   out.append(line)
-
-              if fadd > 0 or fskip > 0:
+              if fadd > 0:
                   with open(path, "w") as fh:
                       fh.writelines(out)
-                  if fadd > 0:
-                      files_changed += 1
+                  files_changed += 1
                   total_added += fadd
-                  total_skipped += fskip
-
           print(f"Files changed: {files_changed}")
           print(f"non_overridable additions: {total_added}")
-          print(f"skipped (overridden, left polymorphic): {total_skipped}")
           PYEOF
 
-      - name: Reconfigure build to pick up patches
+      - name: Dump solv/model.f90 for diagnosis
+        if: always()
+        run: |
+          echo "=== solv/model.f90 lines 140-200 (context around line 159) ==="
+          sed -n '140,200p' src/solv/model.f90 2>/dev/null || echo "(missing)"
+          echo ""
+          echo "=== solv/model.f90 lines 680-720 (context around line 698) ==="
+          sed -n '680,720p' src/solv/model.f90 2>/dev/null || echo "(missing)"
+          echo ""
+          echo "=== Types declared in src/solv/model.f90 ==="
+          grep -nE "^\s*type[ ,].*::" src/solv/model.f90 2>/dev/null || echo "(none)"
+          echo ""
+          echo "=== 'class(...), allocatable' in src/solv/ ==="
+          grep -rnE "class\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*,[[:space:]]*allocatable" src/solv/ 2>/dev/null || echo "(none)"
+          echo ""
+          echo "=== 'allocate(' with '::' anywhere in src/solv/ ==="
+          grep -rnE "allocate\s*\(\s*[A-Za-z_]+[[:space:]]*::" src/solv/ 2>/dev/null || echo "(none)"
+          echo ""
+          echo "=== 'select type' blocks in src/solv/ ==="
+          grep -rn "select *type" src/solv/ 2>/dev/null || echo "(none)"
+          echo ""
+          echo "=== 'use xtb_solv_' or 'TSolvation' references outside src/solv/ ==="
+          grep -rn "TSolvation\|xtb_solv" src/ 2>/dev/null | grep -v "^src/solv/" | head -n 30 || echo "(none)"
+          echo ""
+          echo "=== Is src/solv referenced in src/meson.build? ==="
+          grep -n "solv" src/meson.build 2>/dev/null || echo "(no solv references)"
+
+      - name: Reconfigure build
         run: |
           meson setup --reconfigure builddir || {
             echo "=== Reconfigure failed ==="
