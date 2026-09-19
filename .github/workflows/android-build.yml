@@ -64,7 +64,6 @@ jobs:
           NDK_BIN="$NDK_TOOLCHAIN/bin"
           ANDROID_LIB_DIR="$SYSROOT/usr/lib/aarch64-linux-android/21"
 
-          # Shim for glibc-only symbol __gnu_strerror_r
           cat > /tmp/fortran_shim.c << 'C'
           #include <string.h>
           #include <stddef.h>
@@ -115,22 +114,6 @@ jobs:
           chmod +x flang-wrapper.sh
           echo "FLANG_WRAPPER=$PWD/flang-wrapper.sh" >> $GITHUB_ENV
 
-      - name: Test link
-        run: |
-          cat > /tmp/test.f90 << 'FORT'
-          program hello
-            print *, "hello"
-          end program hello
-          FORT
-
-          echo "=== Compile only ==="
-          ./flang-wrapper.sh -c /tmp/test.f90 -o /tmp/test.o && echo "COMPILE OK"
-
-          echo ""
-          echo "=== Compile and link (verbose linker) ==="
-          ./flang-wrapper.sh /tmp/test.f90 -o /tmp/test -Wl,--verbose 2>&1 | tail -n 60
-          ls -la /tmp/test 2>&1 || true
-
       - name: Create Meson cross-file
         run: |
           NDK_BIN="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
@@ -160,8 +143,7 @@ jobs:
         run: |
           meson setup builddir \
               --cross-file android-arm64.ini \
-              -Dlapack=custom \
-              -Dcustom_libraries= \
+              -Dlapack=netlib \
               -Dopenmp=false \
               -Dtblite=disabled \
               -Dcpcmx=disabled || {
