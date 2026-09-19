@@ -26,7 +26,7 @@ jobs:
           unzip -q android-ndk-r27c-linux.zip
           echo "ANDROID_NDK_HOME=$PWD/android-ndk-r27c" >> $GITHUB_ENV
 
-      - name: Download Flang and LLVM
+      - name: Download Flang, LLVM, and aarch64 target
         run: |
           wget -q -O flang-host.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-flang-host.tar.bz2
           mkdir -p flang-host
@@ -36,18 +36,29 @@ jobs:
           mkdir -p full-install
           tar -xjf full-install.tar.bz2 -C full-install
 
-          # Target package (may contain aarch64 Fortran runtime libs)
-          wget -q -O flang-aarch64.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-flang-aarch64.tar.bz2 || true
+          wget -q -O flang-aarch64.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-flang-aarch64.tar.bz2
           mkdir -p flang-aarch64
-          tar -xjf flang-aarch64.tar.bz2 -C flang-aarch64 2>/dev/null || true
+          tar -xjf flang-aarch64.tar.bz2 -C flang-aarch64
 
-          echo "=== Contents of flang-aarch64 (top 40 files) ==="
-          find flang-aarch64 -type f 2>/dev/null | head -n 40
+          echo "=================================================="
+          echo "=== CONTENTS OF package-flang-aarch64          ==="
+          echo "=================================================="
+          find flang-aarch64 -type f | head -n 80
 
           echo ""
-          echo "=== Looking for aarch64 Fortran runtime libs everywhere ==="
-          find $PWD -name 'libFortranRuntime.a' 2>/dev/null
-          find $PWD -name 'libFortranDecimal.a' 2>/dev/null
+          echo "=== Looking for libFortranRuntime.a in aarch64 ==="
+          find flang-aarch64 -name 'libFortranRuntime*' 2>/dev/null
+
+          echo ""
+          echo "=== Looking for ANY libFortran* in aarch64 ==="
+          find flang-aarch64 -name 'libFortran*' 2>/dev/null
+
+          echo ""
+          echo "=== File types of found .a files ==="
+          for f in $(find flang-aarch64 -name 'libFortran*.a' 2>/dev/null); do
+            echo "--- $f ---"
+            file "$f"
+          done
 
           FLANG_BIN=$(find $PWD/flang-host -type f -name 'flang-*' -executable | head -n 1)
           FLANG_LIB_DIR=$(dirname $(dirname "$FLANG_BIN"))/lib
@@ -59,10 +70,38 @@ jobs:
           ln -sf "$CLANG_DEV_LIB/libLLVM-21.so" runtime-libs/libLLVM.so
 
           RUNTIME_LIBS="$PWD/runtime-libs"
+          AARCH64_RUNTIME_LIB=$(find $PWD/flang-aarch64 -name 'libFortranRuntime.a' -exec dirname {} \; | head -n 1)
 
           echo "FLANG_BIN=$FLANG_BIN" >> $GITHUB_ENV
           echo "FLANG_LIB_DIR=$FLANG_LIB_DIR" >> $GITHUB_ENV
           echo "RUNTIME_LIBS=$RUNTIME_LIBS" >> $GITHUB_ENV
+          echo "AARCH64_RUNTIME_LIB=$AARCH64_RUNTIME_LIB" >> $GITHUB_ENV
+
+          echo ""
+          echo "AARCH64_RUNTIME_LIB=$AARCH64_RUNTIME_LIB"
+
+      - name: Overwrite host runtime with aarch64 runtime
+        run: |
+          if [ -z "${{ env.AARCH64_RUNTIME_LIB }}" ]; then
+            echo "ERROR: No aarch64 Fortran runtime found in package-flang-aarch64."
+            echo "We will need a different strategy."
+            exit 1
+          fi
+
+          echo "Host Fortran runtime dir: ${{ env.FLANG_LIB_DIR }}"
+          echo "aarch64 Fortran runtime dir: ${{ env.AARCH64_RUNTIME_LIB }}"
+
+          echo ""
+          echo "=== Before: file type of host libFortranRuntime.a ==="
+          file "${{ env.FLANG_LIB_DIR }}/libFortranRuntime.a" || true
+
+          echo ""
+          echo "=== Copying aarch64 runtime over host runtime ==="
+          cp -v "${{ env.AARCH64_RUNTIME_LIB }}"/libFortran*.a "${{ env.FLANG_LIB_DIR }}/" || true
+
+          echo ""
+          echo "=== After: file type of host libFortranRuntime.a ==="
+          file "${{ env.FLANG_LIB_DIR }}/libFortranRuntime.a" || true
 
       - name: Create Flang wrapper
         run: |
@@ -85,7 +124,7 @@ jobs:
           chmod +x flang-wrapper.sh
           echo "FLANG_WRAPPER=$PWD/flang-wrapper.sh" >> $GITHUB_ENV
 
-      - name: Debug Flang compile and link
+      - name: Test link with aarch64 runtime
         run: |
           cat > /tmp/test.f90 << 'FORT'
           program hello
@@ -93,27 +132,11 @@ jobs:
           end program hello
           FORT
 
-          echo "========================================"
-          echo "=== TEST 1: compile only (no link)  ==="
-          echo "========================================"
-          ./flang-wrapper.sh -c /tmp/test.f90 -o /tmp/test.o
-          echo "Exit code: $?"
-          ls -la /tmp/test.o 2>&1 || true
-
-          echo ""
-          echo "========================================"
-          echo "=== TEST 2: compile AND link        ==="
-          echo "========================================"
+          echo "=== Compile and link ==="
           ./flang-wrapper.sh /tmp/test.f90 -o /tmp/test
           echo "Exit code: $?"
           ls -la /tmp/test 2>&1 || true
           file /tmp/test 2>&1 || true
-
-          echo ""
-          echo "========================================"
-          echo "=== TEST 3: compile+link with -v     ==="
-          echo "========================================"
-          ./flang-wrapper.sh -v /tmp/test.f90 -o /tmp/test 2>&1 | tail -n 40
 
       - name: Create Meson cross-file
         run: |
@@ -149,10 +172,7 @@ jobs:
               -Dopenmp=false \
               -Dtblite=disabled \
               -Dcpcmx=disabled || {
-            echo ""
-            echo "========================================"
-            echo "=== MESON LOG (actual error)        ==="
-            echo "========================================"
+            echo "=== MESON LOG ==="
             cat builddir/meson-logs/meson-log.txt
             exit 1
           }
