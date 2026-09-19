@@ -135,7 +135,6 @@ jobs:
         run: |
           mkdir -p intrinsic-modules
           cd intrinsic-modules
-
           mkdir -p "${{ env.FLANG_INC_DIR }}/backup"
           cp "${{ env.FLANG_INC_DIR }}"/*.mod "${{ env.FLANG_INC_DIR }}/backup/" 2>/dev/null || true
           rm -f "${{ env.FLANG_INC_DIR }}"/*.mod
@@ -149,22 +148,12 @@ jobs:
             public :: input_unit, output_unit, error_unit
             public :: iostat_end, iostat_eor, iostat_inquire_internal_unit
             public :: character_storage_size, file_storage_size, numeric_storage_size
-            integer, parameter :: int8 = 1
-            integer, parameter :: int16 = 2
-            integer, parameter :: int32 = 4
-            integer, parameter :: int64 = 8
-            integer, parameter :: real32 = 4
-            integer, parameter :: real64 = 8
-            integer, parameter :: real128 = 16
-            integer, parameter :: input_unit = 5
-            integer, parameter :: output_unit = 6
-            integer, parameter :: error_unit = 0
-            integer, parameter :: iostat_end = -1
-            integer, parameter :: iostat_eor = -2
+            integer, parameter :: int8 = 1, int16 = 2, int32 = 4, int64 = 8
+            integer, parameter :: real32 = 4, real64 = 8, real128 = 16
+            integer, parameter :: input_unit = 5, output_unit = 6, error_unit = 0
+            integer, parameter :: iostat_end = -1, iostat_eor = -2
             integer, parameter :: iostat_inquire_internal_unit = 0
-            integer, parameter :: character_storage_size = 8
-            integer, parameter :: file_storage_size = 8
-            integer, parameter :: numeric_storage_size = 32
+            integer, parameter :: character_storage_size = 8, file_storage_size = 8, numeric_storage_size = 32
           end module iso_fortran_env
           FORT
 
@@ -179,21 +168,10 @@ jobs:
             public :: c_associated, c_f_pointer, c_loc, c_funloc
             public :: c_null_char, c_alert, c_backspace, c_form_feed
             public :: c_new_line, c_carriage_return, c_horizontal_tab, c_vertical_tab
-            integer, parameter :: c_int = 4
-            integer, parameter :: c_short = 2
-            integer, parameter :: c_long = 8
-            integer, parameter :: c_long_long = 8
-            integer, parameter :: c_signed_char = 1
-            integer, parameter :: c_size_t = 8
-            integer, parameter :: c_int8_t = 1
-            integer, parameter :: c_int16_t = 2
-            integer, parameter :: c_int32_t = 4
-            integer, parameter :: c_int64_t = 8
-            integer, parameter :: c_float = 4
-            integer, parameter :: c_double = 8
-            integer, parameter :: c_long_double = 16
-            integer, parameter :: c_bool = 1
-            integer, parameter :: c_char = 1
+            integer, parameter :: c_int = 4, c_short = 2, c_long = 8, c_long_long = 8
+            integer, parameter :: c_signed_char = 1, c_size_t = 8
+            integer, parameter :: c_int8_t = 1, c_int16_t = 2, c_int32_t = 4, c_int64_t = 8
+            integer, parameter :: c_float = 4, c_double = 8, c_long_double = 16, c_bool = 1, c_char = 1
             type :: c_ptr
               integer(kind=8) :: i = 0
             end type c_ptr
@@ -236,20 +214,11 @@ jobs:
           cat > ieee_features.f90 << 'FORT'
           module ieee_features
             implicit none
-            integer, parameter :: ieee_datatype = 1
-            integer, parameter :: ieee_denormal = 2
-            integer, parameter :: ieee_divide = 3
-            integer, parameter :: ieee_halting = 4
-            integer, parameter :: ieee_inexact_flag = 5
-            integer, parameter :: ieee_inf = 6
-            integer, parameter :: ieee_invalid_flag = 7
-            integer, parameter :: ieee_nan = 8
-            integer, parameter :: ieee_rounding = 9
-            integer, parameter :: ieee_sqrt = 10
-            integer, parameter :: ieee_subnormal = 11
-            integer, parameter :: ieee_underflow_flag = 12
-            integer, parameter :: ieee_overflow_flag = 13
-            integer, parameter :: ieee_usercall = 14
+            integer, parameter :: ieee_datatype = 1, ieee_denormal = 2, ieee_divide = 3
+            integer, parameter :: ieee_halting = 4, ieee_inexact_flag = 5, ieee_inf = 6
+            integer, parameter :: ieee_invalid_flag = 7, ieee_nan = 8, ieee_rounding = 9
+            integer, parameter :: ieee_sqrt = 10, ieee_subnormal = 11
+            integer, parameter :: ieee_underflow_flag = 12, ieee_overflow_flag = 13, ieee_usercall = 14
           end module ieee_features
           FORT
 
@@ -270,10 +239,8 @@ jobs:
             type(ieee_flag_type), parameter :: ieee_divide_by_zero = ieee_flag_type(3)
             type(ieee_flag_type), parameter :: ieee_underflow = ieee_flag_type(4)
             type(ieee_flag_type), parameter :: ieee_inexact = ieee_flag_type(5)
-            type(ieee_flag_type), parameter :: ieee_usual(3) = &
-              [ieee_overflow, ieee_divide_by_zero, ieee_invalid]
-            type(ieee_flag_type), parameter :: ieee_all(5) = &
-              [ieee_overflow, ieee_divide_by_zero, ieee_invalid, ieee_underflow, ieee_inexact]
+            type(ieee_flag_type), parameter :: ieee_usual(3) = [ieee_overflow, ieee_divide_by_zero, ieee_invalid]
+            type(ieee_flag_type), parameter :: ieee_all(5) = [ieee_overflow, ieee_divide_by_zero, ieee_invalid, ieee_underflow, ieee_inexact]
           contains
             subroutine ieee_get_flag(flag, value)
               type(ieee_flag_type), intent(in) :: flag
@@ -312,11 +279,9 @@ jobs:
             use ieee_exceptions
             implicit none
             private
-
             type :: ieee_class_type
               integer :: c = 0
             end type
-
             type(ieee_class_type), parameter :: ieee_quiet_nan = ieee_class_type(1)
             type(ieee_class_type), parameter :: ieee_signaling_nan = ieee_class_type(2)
             type(ieee_class_type), parameter :: ieee_positive_inf = ieee_class_type(3)
@@ -327,16 +292,11 @@ jobs:
             type(ieee_class_type), parameter :: ieee_negative_denormal = ieee_class_type(8)
             type(ieee_class_type), parameter :: ieee_positive_normal = ieee_class_type(9)
             type(ieee_class_type), parameter :: ieee_negative_normal = ieee_class_type(10)
-
             public :: ieee_class_type, ieee_value
-            public :: ieee_quiet_nan, ieee_signaling_nan, ieee_positive_inf
-            public :: ieee_negative_inf, ieee_positive_zero, ieee_negative_zero
-            public :: ieee_positive_denormal, ieee_negative_denormal
+            public :: ieee_quiet_nan, ieee_signaling_nan, ieee_positive_inf, ieee_negative_inf
+            public :: ieee_positive_zero, ieee_negative_zero, ieee_positive_denormal, ieee_negative_denormal
             public :: ieee_positive_normal, ieee_negative_normal
-            public :: ieee_is_nan, ieee_is_finite, ieee_is_normal
-            public :: ieee_is_negative, ieee_is_positive
-            public :: ieee_unordered
-
+            public :: ieee_is_nan, ieee_is_finite, ieee_is_normal, ieee_is_negative, ieee_is_positive, ieee_unordered
             interface ieee_value
               module procedure ieee_value_r4, ieee_value_r8
             end interface
@@ -424,11 +384,8 @@ jobs:
             "${{ env.FLANG_WRAPPER }}" -I. -c "${m}.f90" -o "${m}.o" 2>&1 | head -n 5
             if [ -f "${m}.mod" ]; then echo "OK: ${m}.mod"; else echo "FAIL: ${m}.mod"; fi
           done
-
           for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
-            if [ -f "${m}.mod" ]; then
-              cp -v "${m}.mod" "${{ env.FLANG_INC_DIR }}/${m}.mod"
-            fi
+            if [ -f "${m}.mod" ]; then cp -v "${m}.mod" "${{ env.FLANG_INC_DIR }}/${m}.mod"; fi
           done
 
       - name: Build LAPACK for aarch64 Android
@@ -436,29 +393,19 @@ jobs:
           wget -q https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v3.12.0.tar.gz
           tar xzf v3.12.0.tar.gz
           cd lapack-3.12.0
-
           sed -i '/add_subdirectory(LAPACKE/d' CMakeLists.txt
-
           mkdir build && cd build
-
           cmake .. \
-            -DCMAKE_SYSTEM_NAME=Android \
-            -DCMAKE_SYSTEM_VERSION=21 \
+            -DCMAKE_SYSTEM_NAME=Android -DCMAKE_SYSTEM_VERSION=21 \
             -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
             -DCMAKE_ANDROID_NDK="${{ env.ANDROID_NDK_HOME }}" \
             -DCMAKE_Fortran_COMPILER="${{ env.FLANG_WRAPPER }}" \
             -DCMAKE_C_COMPILER="${{ env.NDK_BIN }}/aarch64-linux-android21-clang" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=ON \
-            -DBUILD_TESTING=OFF \
-            -DLAPACKE=OFF \
-            -DBUILD_LAPACKE=OFF \
-            -DCBLAS=OFF \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF \
+            -DLAPACKE=OFF -DBUILD_LAPACKE=OFF -DCBLAS=OFF \
             -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-            -DCMAKE_Fortran_COMPILER_WORKS=1 \
-            -DCMAKE_C_COMPILER_WORKS=1 \
+            -DCMAKE_Fortran_COMPILER_WORKS=1 -DCMAKE_C_COMPILER_WORKS=1 \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/lapack-install"
-
           make -j$(nproc)
           make install
 
@@ -492,294 +439,121 @@ jobs:
               --cross-file android-arm64.ini \
               -Dlapack=custom \
               -Dcustom_libraries="-L${LAPACK_DIR}/lib,lapack,blas" \
-              -Dopenmp=false \
-              -Dtblite=disabled \
-              -Dcpcmx=disabled || {
+              -Dopenmp=false -Dtblite=disabled -Dcpcmx=disabled || {
             echo "=== MESON LOG ==="
             cat builddir/meson-logs/meson-log.txt
             exit 1
           }
 
-      - name: Patch mctc-lib to disable JSON (removes jonquil and toml-f)
+      - name: Patch mctc-lib JSON + ncoord
         run: |
           F=subprojects/mctc-lib/config/meson.build
           sed -i "s|required: get_option('json'),|required: false,|" "$F"
           sed -i "/fallback: \['jonquil','jonquil_dep'\],/d" "$F"
-          grep -B2 -A6 "jonquil" "$F" || echo "(no jonquil references — GOOD)"
-
-      - name: Patch mctc-lib to remove ncoord (Flang ARM fir.dispatch)
-        run: |
           find subprojects/mctc-lib -name 'meson.build' -exec sed -i '/ncoord/ s|^|# DISABLED-NCOORD: |' {} \;
 
-      - name: TEST abstract base + deferred binding + class() call
-        run: |
-          run_test() {
-            local name="$1"
-            local file="$2"
-            echo "================================================================"
-            echo "$name"
-            echo "================================================================"
-            "${{ env.FLANG_WRAPPER }}" -c "$file" -o "${file%.f90}.o" 2>&1 | head -n 15
-            if [ -f "${file%.f90}.o" ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
-            echo ""
-          }
-
-          # T1: abstract base with non_overridable NON-deferred binding
-          cat > /tmp/t1.f90 << 'EOF'
-          module t1_mod
-            implicit none
-            type, abstract :: TBase
-              integer :: x = 0
-            contains
-              procedure, non_overridable :: get_x
-            end type
-            type, extends(TBase) :: TSub
-              integer :: y = 0
-            end type
-          contains
-            subroutine get_x(self, v)
-              class(TBase), intent(in) :: self
-              integer, intent(out) :: v
-              v = self%x
-            end subroutine
-            subroutine caller(obj)
-              class(TBase), intent(in) :: obj
-              integer :: v
-              call obj%get_x(v)
-            end subroutine
-          end module
-          EOF
-          run_test "T1: abstract + non_overridable + class() call" /tmp/t1.f90
-
-          # T2: abstract base with DEFERRED binding, subclass override, class() call
-          cat > /tmp/t2.f90 << 'EOF'
-          module t2_mod
-            implicit none
-            type, abstract :: TBase
-              integer :: x = 0
-            contains
-              procedure(compute_iface), deferred :: compute
-            end type
-            abstract interface
-              subroutine compute_iface(self)
-                import :: TBase
-                class(TBase), intent(in) :: self
-              end subroutine
-            end interface
-            type, extends(TBase) :: TSub
-              integer :: y = 0
-            contains
-              procedure :: compute => sub_compute
-            end type
-          contains
-            subroutine sub_compute(self)
-              class(TSub), intent(in) :: self
-            end subroutine
-            subroutine caller(obj)
-              class(TBase), intent(in) :: obj
-              call obj%compute()
-            end subroutine
-          end module
-          EOF
-          run_test "T2: abstract + DEFERRED + subclass override + class() call" /tmp/t2.f90
-
-          # T3: same as T2 but the call site uses type() instead of class()
-          cat > /tmp/t3.f90 << 'EOF'
-          module t3_mod
-            implicit none
-            type, abstract :: TBase
-              integer :: x = 0
-            contains
-              procedure(compute_iface), deferred :: compute
-            end type
-            abstract interface
-              subroutine compute_iface(self)
-                import :: TBase
-                class(TBase), intent(in) :: self
-              end subroutine
-            end interface
-            type, extends(TBase) :: TSub
-              integer :: y = 0
-            contains
-              procedure :: compute => sub_compute
-            end type
-          contains
-            subroutine sub_compute(self)
-              class(TSub), intent(in) :: self
-            end subroutine
-            subroutine caller(obj)
-              type(TSub), intent(in) :: obj
-              call obj%compute()
-            end subroutine
-          end module
-          EOF
-          run_test "T3: abstract + DEFERRED + type() call site" /tmp/t3.f90
-
-          # T4: abstract base with two levels of inheritance
-          cat > /tmp/t4.f90 << 'EOF'
-          module t4_mod
-            implicit none
-            type, abstract :: TBase
-              integer :: x = 0
-            contains
-              procedure(compute_iface), deferred :: compute
-            end type
-            abstract interface
-              subroutine compute_iface(self)
-                import :: TBase
-                class(TBase), intent(in) :: self
-              end subroutine
-            end interface
-            type, abstract, extends(TBase) :: TMid
-              integer :: y = 0
-            end type
-            type, extends(TMid) :: TLeaf
-              integer :: z = 0
-            contains
-              procedure :: compute => leaf_compute
-            end type
-          contains
-            subroutine leaf_compute(self)
-              class(TLeaf), intent(in) :: self
-            end subroutine
-            subroutine caller(obj)
-              class(TBase), intent(in) :: obj
-              call obj%compute()
-            end subroutine
-          end module
-          EOF
-          run_test "T4: 3-level abstract hierarchy + class() call" /tmp/t4.f90
-
-      - name: Dump model_hessian for inspection
+      - name: Survey model_hessian usage
         if: always()
         run: |
           echo "================================================================"
-          echo "src/model_hessian/type.f90 (full file, numbered)"
+          echo "Who imports xtb_modelhessian_type?"
           echo "================================================================"
-          cat -n src/model_hessian/type.f90 2>/dev/null || echo "(not found)"
+          grep -rn "xtb_modelhessian_type\|TModelHessian\|TInternalModelHessianBase" src/ 2>/dev/null \
+            | grep -v "^src/model_hessian/type.f90" \
+            | grep -v "^src/model_hessian/internal.f90" \
+            | grep -v "^src/model_hessian/lindh.f90" \
+            | grep -v "^src/model_hessian/swart.f90" \
+            | grep -v "^src/model_hessian/gff.f90" \
+            || echo "(none)"
           echo ""
           echo "================================================================"
-          echo "All 'deferred' bindings in src/model_hessian/"
+          echo "Where is 'compute_packed' or 'compute_dense' called?"
           echo "================================================================"
-          grep -rn "deferred" src/model_hessian/ 2>/dev/null || echo "(none)"
+          grep -rn "compute_packed\|compute_dense" src/ 2>/dev/null || echo "(none)"
           echo ""
           echo "================================================================"
-          echo "All class() usages in src/model_hessian/"
+          echo "Where is 'modhess' (or similar) used in the C API path?"
           echo "================================================================"
-          grep -rn "class(" src/model_hessian/ 2>/dev/null || echo "(none)"
+          grep -rn "model_hessian\|modhess" src/api/ 2>/dev/null || echo "(none in src/api)"
+          echo ""
+          echo "================================================================"
+          echo "Files in src/model_hessian/ that are listed in meson.build"
+          echo "================================================================"
+          grep -n "model_hessian\|hessian" src/meson.build 2>/dev/null || echo "(src/meson.build has no hessian lines)"
 
-      - name: Add non_overridable to ALL type-bound procedures (incl. base types)
+      - name: Patch src/meson.build to remove model_hessian (attempt)
+        if: always()
+        run: |
+          echo "=== Before: model_hessian mentions in src/meson.build ==="
+          grep -n "model_hessian\|hessian" src/meson.build || echo "(none)"
+          echo ""
+          # Comment out any line that adds a model_hessian source
+          sed -i '/model_hessian/I s|^|# DISABLED-MODELHESS: |' src/meson.build || true
+          echo "=== After: model_hessian mentions in src/meson.build ==="
+          grep -n "model_hessian\|hessian" src/meson.build || echo "(all commented out)"
+
+      - name: Add non_overridable (all bindings, incl. base types)
         run: |
           python3 - << 'PYEOF'
-          import re
-          import os
-
+          import re, os
           ROOTS = ["src", "subprojects/mctc-lib/src"]
-          FORTRAN_EXTS = (".f90", ".F90", ".f", ".F", ".f95", ".F95")
-
+          EXTS = (".f90", ".F90", ".f", ".F", ".f95", ".F95")
           all_source = []
           for root in ROOTS:
-              for dirpath, _, filenames in os.walk(root):
-                  for fn in filenames:
-                      if fn.endswith(FORTRAN_EXTS):
-                          all_source.append(os.path.join(dirpath, fn))
-
-          print(f"Scanned {len(all_source)} Fortran files")
-
-          type_binding_report = {}
-
+              for dp, _, fns in os.walk(root):
+                  for fn in fns:
+                      if fn.endswith(EXTS):
+                          all_source.append(os.path.join(dp, fn))
           type_decl_re = re.compile(
               r"^\s*type\s*(?!\()\s*(?:,\s*[^:]+?)?\s*(?:::)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:!.*)?$",
-              re.IGNORECASE,
-          )
+              re.IGNORECASE)
           end_type_re = re.compile(r"^\s*end\s*type\b", re.IGNORECASE)
-
-          simple_binding_re = re.compile(r"^(\s*)procedure\s*::\s*(.*)$")
-          attr_binding_re = re.compile(r"^(\s*)procedure\s*,\s*([^:]+?)\s*::\s*(.*)$")
-
+          simple_re = re.compile(r"^(\s*)procedure\s*::\s*(.*)$")
+          attr_re = re.compile(r"^(\s*)procedure\s*,\s*([^:]+?)\s*::\s*(.*)$")
           deferred_re = re.compile(r",\s*deferred\b", re.IGNORECASE)
           nopass_re = re.compile(r"\bnopass\b", re.IGNORECASE)
-          has_nonoverr_re = re.compile(r"\bnon_overridable\b", re.IGNORECASE)
+          nonov_re = re.compile(r"\bnon_overridable\b", re.IGNORECASE)
 
-          files_changed = 0
-          total_added = 0
-
+          changed = 0
+          added = 0
           for path in all_source:
-              with open(path, "r", errors="replace") as fh:
+              with open(path) as fh:
                   lines = fh.readlines()
-
-              out_lines = []
-              in_type = False
-              current_type = None
-              file_added = 0
-
+              out = []
+              in_t = False; cur_t = None; fadd = 0
               for line in lines:
-                  m_decl = type_decl_re.match(line)
-                  if not in_type and m_decl:
-                      current_type = m_decl.group(1)
-                      in_type = True
-                      out_lines.append(line)
-                      continue
-
-                  if in_type and end_type_re.match(line):
-                      in_type = False
-                      current_type = None
-                      out_lines.append(line)
-                      continue
-
-                  if in_type:
+                  m = type_decl_re.match(line)
+                  if not in_t and m:
+                      cur_t = m.group(1); in_t = True; out.append(line); continue
+                  if in_t and end_type_re.match(line):
+                      in_t = False; cur_t = None; out.append(line); continue
+                  if in_t:
                       if deferred_re.search(line):
-                          out_lines.append(line)
-                          continue
-
-                      m = simple_binding_re.match(line)
+                          out.append(line); continue
+                      m = simple_re.match(line)
                       if m:
-                          new_line = m.group(1) + "procedure, non_overridable :: " + m.group(2) + "\n"
-                          out_lines.append(new_line)
-                          file_added += 1
-                          type_binding_report.setdefault(current_type, 0)
-                          type_binding_report[current_type] += 1
-                          continue
-
-                      m = attr_binding_re.match(line)
+                          out.append(m.group(1) + "procedure, non_overridable :: " + m.group(2) + "\n")
+                          fadd += 1; continue
+                      m = attr_re.match(line)
                       if m:
                           attrs = m.group(2)
-                          if nopass_re.search(attrs):
-                              out_lines.append(line)
-                              continue
-                          if has_nonoverr_re.search(attrs):
-                              out_lines.append(line)
-                              continue
-                          new_line = (
-                              m.group(1)
-                              + "procedure, "
-                              + attrs.strip()
-                              + ", non_overridable :: "
-                              + m.group(3)
-                              + "\n"
-                          )
-                          out_lines.append(new_line)
-                          file_added += 1
-                          type_binding_report.setdefault(current_type, 0)
-                          type_binding_report[current_type] += 1
-                          continue
-
-                  out_lines.append(line)
-
-              if file_added > 0:
+                          if nopass_re.search(attrs) or nonov_re.search(attrs):
+                              out.append(line); continue
+                          out.append(m.group(1) + "procedure, " + attrs.strip() + ", non_overridable :: " + m.group(3) + "\n")
+                          fadd += 1; continue
+                  out.append(line)
+              if fadd > 0:
                   with open(path, "w") as fh:
-                      fh.writelines(out_lines)
-                  files_changed += 1
-                  total_added += file_added
-
-          print(f"Files changed: {files_changed}")
-          print(f"non_overridable additions: {total_added}")
+                      fh.writelines(out)
+                  changed += 1; added += fadd
+          print(f"Files changed: {changed}")
+          print(f"non_overridable additions: {added}")
           PYEOF
 
       - name: Reconfigure build to pick up patches
         run: |
           meson setup --reconfigure builddir || {
-            echo "=== Reconfigure failed — showing meson log ==="
+            echo "=== Reconfigure failed ==="
             cat builddir/meson-logs/meson-log.txt
             exit 1
           }
