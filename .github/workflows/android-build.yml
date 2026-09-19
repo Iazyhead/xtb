@@ -26,101 +26,43 @@ jobs:
           unzip -q android-ndk-r27c-linux.zip
           echo "ANDROID_NDK_HOME=$PWD/android-ndk-r27c" >> $GITHUB_ENV
 
-      - name: Download Flang
+      - name: Download Flang + LLVM Full Install
         run: |
-          wget -q -O flang-host.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-flang-host.tar.bz2
-          tar -xjf flang-host.tar.bz2
-          echo "FLANG_BIN=$PWD/build-host-install/bin/flang-21" >> $GITHUB_ENV
-
-      - name: Create Flang wrapper (with diagnostics)
-        run: |
-          NDK_TOOLCHAIN="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64"
-          SYSROOT="$NDK_TOOLCHAIN/sysroot"
-          FLANG_DIR=$(dirname "${{ env.FLANG_BIN }}")
-          FLANG_ROOT=$(dirname "$FLANG_DIR")
+          wget -q -O full-install.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-install.tar.bz2
+          tar -xjf full-install.tar.bz2
           
-          echo "========== LDD ON FLANG BINARY =========="
-          ldd "${{ env.FLANG_BIN }}" 2>&1 | head -n 50
+          echo "===== Looking for flang binaries ====="
+          find $PWD -type f -name 'flang*' -not -name '*.a' -not -name '*.cmake' 2>/dev/null
           
           echo ""
-          echo "========== SHARED LIBRARIES IN FLANG ROOT =========="
-          find "$FLANG_ROOT" -name '*.so*' 2>/dev/null | head -n 50
+          echo "===== Looking for libLLVM shared libraries ====="
+          find $PWD -name 'libLLVM*.so*' 2>/dev/null
           
           echo ""
-          echo "========== FLANG --version (with LD_LIBRARY_PATH) =========="
-          LD_LIBRARY_PATH="$FLANG_ROOT/lib:$FLANG_ROOT/lib64:$LD_LIBRARY_PATH" \
-            "${{ env.FLANG_BIN }}" --version 2>&1 | head -n 20
+          echo "===== Looking for libFortranRuntime shared libraries ====="
+          find $PWD -name 'libFortranRuntime*' 2>/dev/null
+          find $PWD -name 'libFortranDecimal*' 2>/dev/null
+          
+          # Save flang path
+          FLANG_BIN=$(find $PWD -type f -name 'flang-*' -executable 2>/dev/null | head -n 1)
+          if [ -z "$FLANG_BIN" ]; then
+            FLANG_BIN=$(find $PWD -type f -name 'flang' -executable 2>/dev/null | head -n 1)
+          fi
+          echo "FLANG_BIN=$FLANG_BIN" >> $GITHUB_ENV
+          echo "Selected flang: $FLANG_BIN"
+          
+          # Save LLVM lib dir
+          LLVM_LIB=$(find $PWD -name 'libLLVM*.so*' 2>/dev/null | head -n 1)
+          if [ -n "$LLVM_LIB" ]; then
+            LLVM_LIB_DIR=$(dirname "$LLVM_LIB")
+            echo "LLVM_LIB_DIR=$LLVM_LIB_DIR" >> $GITHUB_ENV
+            echo "LLVM lib dir: $LLVM_LIB_DIR"
+          fi
           
           echo ""
-          echo "========== FLANG --version (plain) =========="
-          "${{ env.FLANG_BIN }}" --version 2>&1 | head -n 20
+          echo "===== Testing flang ====="
+          if [ -n "$LLVM_LIB_DIR" ]; then
+            LD_LIBRARY_PATH="$LLVM_LIB_DIR:$LD_LIBRARY_PATH" "$FLANG_BIN" --version 2>&1 | head -n 5
+          fi
           
-          echo ""
-          echo "========== CREATING WRAPPER =========="
-          cat > flang-wrapper.sh << EOF
-          #!/bin/bash
-          export LD_LIBRARY_PATH="$FLANG_ROOT/lib:$FLANG_ROOT/lib64:\$LD_LIBRARY_PATH"
-          exec "${{ env.FLANG_BIN }}" \\
-              --target=aarch64-linux-android21 \\
-              --sysroot="$SYSROOT" \\
-              -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
-              -fuse-ld=lld \\
-              "\$@"
-          EOF
-          chmod +x flang-wrapper.sh
-          echo "FLANG_WRAPPER=$PWD/flang-wrapper.sh" >> $GITHUB_ENV
-          cat flang-wrapper.sh
-          
-          echo ""
-          echo "========== TESTING WRAPPER =========="
-          ./flang-wrapper.sh --version 2>&1 | head -n 20
-          
-          echo "========== DONE =========="
           exit 0
-
-      - name: Create Meson cross-file
-        run: |
-          NDK_BIN="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          
-          cat > android-arm64.ini << EOF
-          [binaries]
-          c = '${NDK_BIN}/aarch64-linux-android21-clang'
-          cpp = '${NDK_BIN}/aarch64-linux-android21-clang++'
-          fortran = '${{ env.FLANG_WRAPPER }}'
-          ar = '${NDK_BIN}/llvm-ar'
-          strip = '${NDK_BIN}/llvm-strip'
-
-          [host_machine]
-          system = 'android'
-          cpu_family = 'aarch64'
-          cpu = 'aarch64'
-          endian = 'little'
-
-          [properties]
-          needs_exe_wrapper = true
-
-          [built-in options]
-          default_library = 'shared'
-          EOF
-
-      - name: Configure build
-        run: |
-          meson setup builddir \
-              --cross-file android-arm64.ini \
-              -Dlapack=custom \
-              -Dcustom_libraries= \
-              -Dopenmp=false \
-              -Dtblite=disabled \
-              -Dcpcmx=disabled
-
-      - name: Build project
-        run: meson compile -C builddir
-
-      - name: Find built libraries
-        run: find builddir -name '*.so' || true
-
-      - name: Upload libxtb.so
-        uses: actions/upload-artifact@v4
-        with:
-          name: libxtb-android-arm64
-          path: builddir/**/*.so
