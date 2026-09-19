@@ -59,10 +59,6 @@ jobs:
           echo "FLANG_INC_DIR=$FLANG_INC_DIR" >> $GITHUB_ENV
           echo "RUNTIME_LIBS=$PWD/runtime-libs" >> $GITHUB_ENV
 
-          echo ""
-          echo "=== Bundled intrinsic .mod files (before replacement) ==="
-          ls -la "$FLANG_INC_DIR"/*.mod 2>/dev/null | head -n 20
-
       - name: Build shim and Flang wrapper
         run: |
           NDK_TOOLCHAIN="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64"
@@ -108,12 +104,16 @@ jobs:
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
+              -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \\
+              -mllvm -skip-external-rtti-definition \\
               "\${FILTERED[@]}"
           else
             exec "${{ env.FLANG_BIN }}" \\
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
+              -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \\
+              -mllvm -skip-external-rtti-definition \\
               -B"${{ env.NDK_BIN }}" \\
               -fuse-ld=lld \\
               -L"$ANDROID_LIB_DIR" \\
@@ -136,15 +136,12 @@ jobs:
           mkdir -p intrinsic-modules
           cd intrinsic-modules
 
-          # Backup and DELETE bundled x86_64 .mod files so flang can only find our aarch64 ones
           echo "=== Backing up and deleting bundled .mod files ==="
           mkdir -p "${{ env.FLANG_INC_DIR }}/backup"
           cp "${{ env.FLANG_INC_DIR }}"/*.mod "${{ env.FLANG_INC_DIR }}/backup/" 2>/dev/null || true
           rm -f "${{ env.FLANG_INC_DIR }}"/*.mod
           echo "Remaining .mod files in FLANG_INC_DIR (should be none):"
           ls "${{ env.FLANG_INC_DIR }}"/*.mod 2>&1 || echo "(none)"
-
-          # ---- STUBS: only kinds 4 and 8, no kind 10 anywhere ----
 
           cat > iso_fortran_env.f90 << 'FORT'
           module iso_fortran_env
