@@ -59,7 +59,8 @@ jobs:
           echo "FLANG_INC_DIR=$FLANG_INC_DIR" >> $GITHUB_ENV
           echo "RUNTIME_LIBS=$PWD/runtime-libs" >> $GITHUB_ENV
 
-          echo "=== Bundled intrinsic modules ==="
+          echo ""
+          echo "=== Bundled intrinsic .mod files (before replacement) ==="
           ls -la "$FLANG_INC_DIR"/*.mod 2>/dev/null | head -n 20
 
       - name: Build shim and Flang wrapper
@@ -130,47 +131,326 @@ jobs:
           chmod +x flang-wrapper.sh
           echo "FLANG_WRAPPER=$PWD/flang-wrapper.sh" >> $GITHUB_ENV
 
-      - name: Rebuild and install intrinsic modules for aarch64
+      - name: Replace intrinsic modules with aarch64-safe stubs
         run: |
-          LLVM_COMMIT="5e96669f06077099aa41290cdb4c5e6fa0f59349"
-          BASE_URL="https://raw.githubusercontent.com/llvm/llvm-project/${LLVM_COMMIT}/flang/module"
-
           mkdir -p intrinsic-modules
           cd intrinsic-modules
 
-          # Download the 5 intrinsic module sources at the exact LLVM commit flang was built from
-          for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
-            echo "=== Downloading $m.f90 ==="
-            wget -q -O "${m}.f90" "${BASE_URL}/${m}.f90" && echo "OK: $m.f90" || echo "FAIL: $m.f90"
-          done
+          # Backup and DELETE bundled x86_64 .mod files so flang can only find our aarch64 ones
+          echo "=== Backing up and deleting bundled .mod files ==="
+          mkdir -p "${{ env.FLANG_INC_DIR }}/backup"
+          cp "${{ env.FLANG_INC_DIR }}"/*.mod "${{ env.FLANG_INC_DIR }}/backup/" 2>/dev/null || true
+          rm -f "${{ env.FLANG_INC_DIR }}"/*.mod
+          echo "Remaining .mod files in FLANG_INC_DIR (should be none):"
+          ls "${{ env.FLANG_INC_DIR }}"/*.mod 2>&1 || echo "(none)"
 
-          # Compile them with our aarch64 flang (produces aarch64 .mod files, no real(10))
+          # ---- STUBS: only kinds 4 and 8, no kind 10 anywhere ----
+
+          cat > iso_fortran_env.f90 << 'FORT'
+          module iso_fortran_env
+            implicit none
+            private
+            public :: int8, int16, int32, int64
+            public :: real32, real64, real128
+            public :: input_unit, output_unit, error_unit
+            public :: iostat_end, iostat_eor, iostat_inquire_internal_unit
+            public :: character_storage_size, file_storage_size, numeric_storage_size
+            integer, parameter :: int8 = 1
+            integer, parameter :: int16 = 2
+            integer, parameter :: int32 = 4
+            integer, parameter :: int64 = 8
+            integer, parameter :: real32 = 4
+            integer, parameter :: real64 = 8
+            integer, parameter :: real128 = 16
+            integer, parameter :: input_unit = 5
+            integer, parameter :: output_unit = 6
+            integer, parameter :: error_unit = 0
+            integer, parameter :: iostat_end = -1
+            integer, parameter :: iostat_eor = -2
+            integer, parameter :: iostat_inquire_internal_unit = 0
+            integer, parameter :: character_storage_size = 8
+            integer, parameter :: file_storage_size = 8
+            integer, parameter :: numeric_storage_size = 32
+          end module iso_fortran_env
+          FORT
+
+          cat > iso_c_binding.f90 << 'FORT'
+          module iso_c_binding
+            implicit none
+            private
+            public :: c_int, c_short, c_long, c_long_long, c_signed_char
+            public :: c_size_t, c_int8_t, c_int16_t, c_int32_t, c_int64_t
+            public :: c_float, c_double, c_long_double, c_bool, c_char
+            public :: c_ptr, c_funptr, c_null_ptr, c_null_funptr
+            public :: c_associated, c_f_pointer, c_loc, c_funloc
+            public :: c_null_char, c_alert, c_backspace, c_form_feed
+            public :: c_new_line, c_carriage_return, c_horizontal_tab, c_vertical_tab
+            integer, parameter :: c_int = 4
+            integer, parameter :: c_short = 2
+            integer, parameter :: c_long = 8
+            integer, parameter :: c_long_long = 8
+            integer, parameter :: c_signed_char = 1
+            integer, parameter :: c_size_t = 8
+            integer, parameter :: c_int8_t = 1
+            integer, parameter :: c_int16_t = 2
+            integer, parameter :: c_int32_t = 4
+            integer, parameter :: c_int64_t = 8
+            integer, parameter :: c_float = 4
+            integer, parameter :: c_double = 8
+            integer, parameter :: c_long_double = 16
+            integer, parameter :: c_bool = 1
+            integer, parameter :: c_char = 1
+            type :: c_ptr
+              integer(kind=8) :: i = 0
+            end type c_ptr
+            type :: c_funptr
+              integer(kind=8) :: i = 0
+            end type c_funptr
+            type(c_ptr), parameter :: c_null_ptr = c_ptr(0)
+            type(c_funptr), parameter :: c_null_funptr = c_funptr(0)
+            character(kind=1, len=1), parameter :: c_null_char = char(0)
+            character(kind=1, len=1), parameter :: c_alert = char(7)
+            character(kind=1, len=1), parameter :: c_backspace = char(8)
+            character(kind=1, len=1), parameter :: c_form_feed = char(12)
+            character(kind=1, len=1), parameter :: c_new_line = char(10)
+            character(kind=1, len=1), parameter :: c_carriage_return = char(13)
+            character(kind=1, len=1), parameter :: c_horizontal_tab = char(9)
+            character(kind=1, len=1), parameter :: c_vertical_tab = char(11)
+          contains
+            logical function c_associated(cptr) result(r)
+              type(c_ptr), intent(in) :: cptr
+              r = cptr%i /= 0
+            end function
+            function c_loc(x) result(r)
+              type(c_ptr) :: r
+              class(*), target, intent(in) :: x
+              r = c_ptr(0)
+            end function
+            function c_funloc(x) result(r)
+              type(c_funptr) :: r
+              procedure(), pointer, intent(in) :: x
+              r = c_funptr(0)
+            end function
+            subroutine c_f_pointer(cptr, fptr)
+              type(c_ptr), intent(in) :: cptr
+              integer, pointer, intent(out) :: fptr
+              fptr => null()
+            end subroutine
+          end module iso_c_binding
+          FORT
+
+          cat > ieee_features.f90 << 'FORT'
+          module ieee_features
+            implicit none
+            integer, parameter :: ieee_datatype = 1
+            integer, parameter :: ieee_denormal = 2
+            integer, parameter :: ieee_divide = 3
+            integer, parameter :: ieee_halting = 4
+            integer, parameter :: ieee_inexact_flag = 5
+            integer, parameter :: ieee_inf = 6
+            integer, parameter :: ieee_invalid_flag = 7
+            integer, parameter :: ieee_nan = 8
+            integer, parameter :: ieee_rounding = 9
+            integer, parameter :: ieee_sqrt = 10
+            integer, parameter :: ieee_subnormal = 11
+            integer, parameter :: ieee_underflow_flag = 12
+            integer, parameter :: ieee_overflow_flag = 13
+            integer, parameter :: ieee_usercall = 14
+          end module ieee_features
+          FORT
+
+          cat > ieee_exceptions.f90 << 'FORT'
+          module ieee_exceptions
+            use iso_fortran_env, only: real32, real64
+            implicit none
+            private
+            public :: ieee_flag_type, ieee_invalid, ieee_overflow, ieee_divide_by_zero
+            public :: ieee_underflow, ieee_inexact, ieee_usual, ieee_all
+            public :: ieee_get_flag, ieee_set_flag, ieee_get_halting_mode
+            public :: ieee_set_halting_mode, ieee_support_flag, ieee_support_halting
+            type :: ieee_flag_type
+              integer :: flag = 0
+            end type
+            type(ieee_flag_type), parameter :: ieee_invalid = ieee_flag_type(1)
+            type(ieee_flag_type), parameter :: ieee_overflow = ieee_flag_type(2)
+            type(ieee_flag_type), parameter :: ieee_divide_by_zero = ieee_flag_type(3)
+            type(ieee_flag_type), parameter :: ieee_underflow = ieee_flag_type(4)
+            type(ieee_flag_type), parameter :: ieee_inexact = ieee_flag_type(5)
+            type(ieee_flag_type), parameter :: ieee_usual(3) = &
+              [ieee_overflow, ieee_divide_by_zero, ieee_invalid]
+            type(ieee_flag_type), parameter :: ieee_all(5) = &
+              [ieee_overflow, ieee_divide_by_zero, ieee_invalid, ieee_underflow, ieee_inexact]
+          contains
+            subroutine ieee_get_flag(flag, value)
+              type(ieee_flag_type), intent(in) :: flag
+              logical, intent(out) :: value
+              value = .false.
+            end subroutine
+            subroutine ieee_set_flag(flag, value)
+              type(ieee_flag_type), intent(in) :: flag
+              logical, intent(in) :: value
+            end subroutine
+            subroutine ieee_get_halting_mode(flag, halting)
+              type(ieee_flag_type), intent(in) :: flag
+              logical, intent(out) :: halting
+              halting = .false.
+            end subroutine
+            subroutine ieee_set_halting_mode(flag, halting)
+              type(ieee_flag_type), intent(in) :: flag
+              logical, intent(in) :: halting
+            end subroutine
+            subroutine ieee_support_flag(flag, x)
+              type(ieee_flag_type), intent(in) :: flag
+              real(real32), intent(in) :: x
+            end subroutine
+            subroutine ieee_support_halting(flag, halting)
+              type(ieee_flag_type), intent(in) :: flag
+              logical, intent(out) :: halting
+              halting = .false.
+            end subroutine
+          end module ieee_exceptions
+          FORT
+
+          cat > ieee_arithmetic.f90 << 'FORT'
+          module ieee_arithmetic
+            use iso_fortran_env, only: real32, real64
+            use ieee_features
+            use ieee_exceptions
+            implicit none
+            private
+            public :: ieee_class_type, ieee_value
+            public :: ieee_quiet_nan, ieee_signaling_nan, ieee_positive_inf
+            public :: ieee_negative_inf, ieee_positive_zero, ieee_negative_zero
+            public :: ieee_positive_denormal, ieee_negative_denormal
+            public :: ieee_positive_normal, ieee_negative_normal
+            public :: ieee_is_nan, ieee_is_finite, ieee_is_normal
+            public :: ieee_is_negative, ieee_is_positive
+            public :: ieee_unordered, ieee_class
+            public :: ieee_copy_sign, ieee_next_after, ieee_rint, ieee_scalb
+            public :: ieee_logb, ieee_rem
+
+            type :: ieee_class_type
+              integer :: c = 0
+            end type
+
+            type(ieee_class_type), parameter :: ieee_quiet_nan = ieee_class_type(1)
+            type(ieee_class_type), parameter :: ieee_signaling_nan = ieee_class_type(2)
+            type(ieee_class_type), parameter :: ieee_positive_inf = ieee_class_type(3)
+            type(ieee_class_type), parameter :: ieee_negative_inf = ieee_class_type(4)
+            type(ieee_class_type), parameter :: ieee_positive_zero = ieee_class_type(5)
+            type(ieee_class_type), parameter :: ieee_negative_zero = ieee_class_type(6)
+            type(ieee_class_type), parameter :: ieee_positive_denormal = ieee_class_type(7)
+            type(ieee_class_type), parameter :: ieee_negative_denormal = ieee_class_type(8)
+            type(ieee_class_type), parameter :: ieee_positive_normal = ieee_class_type(9)
+            type(ieee_class_type), parameter :: ieee_negative_normal = ieee_class_type(10)
+
+            interface ieee_value
+              module procedure ieee_value_r4, ieee_value_r8
+            end interface
+            interface ieee_is_nan
+              module procedure ieee_is_nan_r4, ieee_is_nan_r8
+            end interface
+            interface ieee_is_finite
+              module procedure ieee_is_finite_r4, ieee_is_finite_r8
+            end interface
+            interface ieee_is_normal
+              module procedure ieee_is_normal_r4, ieee_is_normal_r8
+            end interface
+            interface ieee_is_negative
+              module procedure ieee_is_negative_r4, ieee_is_negative_r8
+            end interface
+            interface ieee_is_positive
+              module procedure ieee_is_positive_r4, ieee_is_positive_r8
+            end interface
+            interface ieee_unordered
+              module procedure ieee_unordered_r4, ieee_unordered_r8
+            end interface
+          contains
+            real(real32) function ieee_value_r4(x, class) result(r)
+              real(real32), intent(in) :: x
+              type(ieee_class_type), intent(in) :: class
+              r = x
+            end function
+            real(real64) function ieee_value_r8(x, class) result(r)
+              real(real64), intent(in) :: x
+              type(ieee_class_type), intent(in) :: class
+              r = x
+            end function
+            logical function ieee_is_nan_r4(x) result(r)
+              real(real32), intent(in) :: x
+              r = (x /= x)
+            end function
+            logical function ieee_is_nan_r8(x) result(r)
+              real(real64), intent(in) :: x
+              r = (x /= x)
+            end function
+            logical function ieee_is_finite_r4(x) result(r)
+              real(real32), intent(in) :: x
+              r = (x == x) .and. (abs(x) < huge(x))
+            end function
+            logical function ieee_is_finite_r8(x) result(r)
+              real(real64), intent(in) :: x
+              r = (x == x) .and. (abs(x) < huge(x))
+            end function
+            logical function ieee_is_normal_r4(x) result(r)
+              real(real32), intent(in) :: x
+              r = (x == x) .and. (abs(x) <= huge(x)) .and. (x /= 0.0_real32)
+            end function
+            logical function ieee_is_normal_r8(x) result(r)
+              real(real64), intent(in) :: x
+              r = (x == x) .and. (abs(x) <= huge(x)) .and. (x /= 0.0_real64)
+            end function
+            logical function ieee_is_negative_r4(x) result(r)
+              real(real32), intent(in) :: x
+              r = x < 0.0_real32
+            end function
+            logical function ieee_is_negative_r8(x) result(r)
+              real(real64), intent(in) :: x
+              r = x < 0.0_real64
+            end function
+            logical function ieee_is_positive_r4(x) result(r)
+              real(real32), intent(in) :: x
+              r = x > 0.0_real32
+            end function
+            logical function ieee_is_positive_r8(x) result(r)
+              real(real64), intent(in) :: x
+              r = x > 0.0_real64
+            end function
+            logical function ieee_unordered_r4(x, y) result(r)
+              real(real32), intent(in) :: x, y
+              r = (x /= x) .or. (y /= y)
+            end function
+            logical function ieee_unordered_r8(x, y) result(r)
+              real(real64), intent(in) :: x, y
+              r = (x /= x) .or. (y /= y)
+            end function
+          end module ieee_arithmetic
+          FORT
+
           echo ""
-          echo "=== Compiling for aarch64 ==="
+          echo "=== Compiling stubs with -I. so they use each other ==="
           for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
-            if [ -f "${m}.f90" ]; then
-              echo "--- Compiling $m ---"
-              "${{ env.FLANG_WRAPPER }}" -c "${m}.f90" -o "${m}.o" 2>&1 | head -n 20
-              if [ -f "${m}.mod" ]; then
-                echo "OK: ${m}.mod generated"
-              else
-                echo "FAIL: ${m}.mod NOT generated"
-              fi
+            echo "--- Compiling $m ---"
+            "${{ env.FLANG_WRAPPER }}" -I. -c "${m}.f90" -o "${m}.o" 2>&1 | head -n 30
+            if [ -f "${m}.mod" ]; then
+              echo "OK: ${m}.mod generated"
+            else
+              echo "FAIL: ${m}.mod NOT generated"
             fi
           done
 
           echo ""
-          echo "=== Resulting aarch64 .mod files ==="
-          ls -la *.mod 2>&1 || echo "No .mod files were generated!"
+          echo "=== Verifying no generated .mod has real(10) ==="
+          for f in *.mod; do
+            if grep -q 'real(10)' "$f" 2>/dev/null; then
+              echo "FAIL: $f has real(10)"
+            else
+              echo "OK: $f is clean"
+            fi
+          done
 
           echo ""
-          echo "=== Backing up bundled .mod files ==="
-          mkdir -p "${{ env.FLANG_INC_DIR }}/backup"
-          cp "${{ env.FLANG_INC_DIR }}"/*.mod "${{ env.FLANG_INC_DIR }}/backup/" 2>/dev/null || true
-          ls -la "${{ env.FLANG_INC_DIR }}/backup/" | head -n 10
-
-          echo ""
-          echo "=== Installing aarch64 .mod files over bundled x86_64 ones ==="
+          echo "=== Installing stubs into flang's intrinsic module directory ==="
           for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
             if [ -f "${m}.mod" ]; then
               cp -v "${m}.mod" "${{ env.FLANG_INC_DIR }}/${m}.mod"
@@ -178,12 +458,8 @@ jobs:
           done
 
           echo ""
-          echo "=== Verifying bundled .mod files are now aarch64 ==="
-          if grep -q 'real(10)' "${{ env.FLANG_INC_DIR }}/ieee_arithmetic.mod" 2>/dev/null; then
-            echo "FAIL: bundled ieee_arithmetic.mod still has real(10)"
-          else
-            echo "OK: bundled ieee_arithmetic.mod no longer has real(10)"
-          fi
+          echo "=== Final state of FLANG_INC_DIR ==="
+          ls -la "${{ env.FLANG_INC_DIR }}"/*.mod
 
       - name: Build LAPACK for aarch64 Android
         run: |
