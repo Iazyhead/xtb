@@ -28,28 +28,24 @@ jobs:
 
       - name: Download Flang Toolchain
         run: |
-          wget -O toolchain.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-install.tar.bz2
-          tar -xjf toolchain.tar.bz2
-          
-          echo "===== TOP LEVEL DIRECTORY ====="
-          ls -la
-          
-          echo "===== ALL FILES NAMED *flang* ====="
-          find . -iname '*flang*' -type f 2>/dev/null | head -50
-          
-          echo "===== ALL FILES IN ANY bin/ FOLDER ====="
-          find . -type d -name bin 2>/dev/null
-          
-          echo "===== DONE ====="
-          exit 1
+          wget -O flang-host.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-flang-host.tar.bz2
+          tar -xjf flang-host.tar.bz2
+          echo "--- Searching for flang binary ---"
+          FLANG_PATH=$(find $PWD -name 'aarch64-linux-android-flang' | head -n 1)
+          echo "Found flang at: $FLANG_PATH"
+          if [ -z "$FLANG_PATH" ]; then
+            echo "ERROR: Could not find aarch64-linux-android-flang."
+            exit 1
+          fi
+          FLANG_BIN_DIR=$(dirname "$FLANG_PATH")
+          echo "FLANG_TOOLCHAIN=$(dirname "$FLANG_BIN_DIR")" >> $GITHUB_ENV
 
       - name: Create Meson cross-file
         run: |
-          echo "Using FLANG_TOOLCHAIN: ${{ env.FLANG_TOOLCHAIN }}"
           cat > android-arm64.ini << EOF
           [binaries]
-          c = '${{ env.FLANG_TOOLCHAIN }}/bin/aarch64-linux-android-clang'
-          fortran = '${{ env.FLANG_TOOLCHAIN }}/bin/aarch64-linux-android-flang'
+          c = '${FLANG_TOOLCHAIN}/bin/aarch64-linux-android-clang'
+          fortran = '${FLANG_TOOLCHAIN}/bin/aarch64-linux-android-flang'
           ar = 'llvm-ar'
           strip = 'llvm-strip'
 
@@ -67,7 +63,7 @@ jobs:
           EOF
 
       - name: Configure build
-        run: meson setup builddir --cross-file android-arm64.ini
+        run: meson setup builddir --cross-file android-arm64.ini -Dtblite=disabled -Dcpcmx=disabled
 
       - name: Build project
         run: meson compile -C builddir
