@@ -51,8 +51,6 @@ jobs:
 
           RUNTIME_LIBS="$PWD/runtime-libs"
           AARCH64_RUNTIME_LIB="$PWD/flang-aarch64/build-aarch64-install"
-
-          # Copy aarch64 runtime libs over the host ones
           cp -v "$AARCH64_RUNTIME_LIB"/libFortran*.a "$FLANG_LIB_DIR/"
 
           echo "FLANG_BIN=$FLANG_BIN" >> $GITHUB_ENV
@@ -82,7 +80,6 @@ jobs:
           export LD_LIBRARY_PATH="${{ env.RUNTIME_LIBS }}:${{ env.FLANG_LIB_DIR }}:\$LD_LIBRARY_PATH"
           export PATH="$NDK_BIN:\$PATH"
 
-          # Detect compile-only mode
           COMPILE_ONLY=0
           for arg in "\$@"; do
             if [[ "\$arg" == "-c" || "\$arg" == "-E" || "\$arg" == "-S" ]]; then
@@ -105,9 +102,14 @@ jobs:
               -B"$NDK_BIN" \\
               -fuse-ld=lld \\
               -L"$ANDROID_LIB_DIR" \\
+              -Wl,--no-as-needed \\
+              -Wl,--unresolved-symbols=ignore-in-object-files \\
               "\$@" \\
+              /tmp/fortran_shim.o \\
+              -lc++_shared \\
               -lc -lm -ldl -llog \\
-              /tmp/fortran_shim.o
+              -Wl,--no-as-needed \\
+              -lc -lm -ldl -llog
           fi
           EOF
           chmod +x flang-wrapper.sh
@@ -125,8 +127,8 @@ jobs:
           ./flang-wrapper.sh -c /tmp/test.f90 -o /tmp/test.o && echo "COMPILE OK"
 
           echo ""
-          echo "=== Compile and link ==="
-          ./flang-wrapper.sh /tmp/test.f90 -o /tmp/test && echo "LINK OK"
+          echo "=== Compile and link (verbose linker) ==="
+          ./flang-wrapper.sh /tmp/test.f90 -o /tmp/test -Wl,--verbose 2>&1 | tail -n 60
           ls -la /tmp/test 2>&1 || true
 
       - name: Create Meson cross-file
