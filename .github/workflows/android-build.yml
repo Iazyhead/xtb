@@ -511,7 +511,7 @@ jobs:
         run: |
           find subprojects/mctc-lib -name 'meson.build' -exec sed -i '/ncoord/ s|^|# DISABLED-NCOORD: |' {} \;
 
-      - name: Devirtualize leaf types (Python)
+      - name: Devirtualize + mark non_overridable (Python)
         run: |
           python3 - << 'PYEOF'
           import re
@@ -529,7 +529,7 @@ jobs:
 
           print(f"Scanned {len(all_source)} Fortran files")
 
-          # 1. Collect abstract type names.
+          # Step 1: collect protected type names
           abstract_re = re.compile(
               r"^\s*type\s*,.*\babstract\b.*::\s*([A-Za-z_][A-Za-z0-9_]*)",
               re.IGNORECASE,
@@ -542,7 +542,6 @@ jobs:
                       if m:
                           abstract_types.add(m.group(1))
 
-          # 2. Collect names that appear as "extends(NAME)".
           extends_re = re.compile(
               r"\bextends\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
               re.IGNORECASE,
@@ -555,52 +554,132 @@ jobs:
                           extended_types.add(m.group(1))
 
           protected = abstract_types | extended_types
-
-          print("Abstract types (protected):", sorted(abstract_types))
-          print("Extended base types (protected):", sorted(extended_types))
-          print(f"Total protected names: {len(protected)}")
+          print("Protected types:", sorted(protected))
           print()
 
-          # 3. Replace class(X) -> type(X) unless X is protected or X == *
+          # Step 2: transform each file
           class_re = re.compile(
               r"\bclass\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
               re.IGNORECASE,
           )
+          type_decl_re = re.compile(
+              r"^\s*type\s*(?:,[^:]*)?::\s*([A-Za-z_][A-Za-z0-9_]*)",
+              re.IGNORECASE,
+          )
+          end_type_re = re.compile(r"^\s*end\s*type\b", re.IGNORECASE)
+
+          # procedure binding matchers
+          simple_binding_re = re.compile(
+              r"^(\s*)procedure\s*::\s*(.*)$"
+          )
+          attr_binding_re = re.compile(
+              r"^(\s*)procedure\s*,\s*([^:]+?)\s*::\s*(.*)$"
+          )
+          deferred_re = re.compile(r",\s*deferred\b", re.IGNORECASE)
+          already_nonoverr_re = re.compile(r"\bnon_overridable\b", re.IGNORECASE)
 
           files_changed = 0
-          total_replacements = 0
+          total_class_swaps = 0
+          total_nonoverr = 0
 
           for path in all_source:
               with open(path, "r", errors="replace") as fh:
                   content = fh.read()
+              lines = content.splitlines(keepends=True)
+              out_lines = []
+
+              in_type = False
+              current_type_protected = True  # default safe
+
+              file_class_swaps = 0
+              file_nonoverr = 0
+
+              for line in lines:
+                  # Check for type definition start
+                  m_decl = type_decl_re.match(line)
+                  if not in_type and m_decl:
+                      # Avoid matching "type(foo) :: var" — require bare "type" before ::
+                      # type_decl_re won't match "type(foo) :: var" because of the [^:]* requirement
+                      type_name = m_decl.group(1)
+                      current_type_protected = (type_name in protected) or (type_name in abstract_types)
+                      in_type = True
+                      out_lines.append(line)
+                      continue
+
+                  if in_type and end_type_re.match(line):
+                      in_type = False
+                      out_lines.append(line)
+                      continue
+
+                  # Modify procedure bindings inside non-protected type definitions
+                  if in_type and not current_type_protected:
+                      if deferred_re.search(line):
+                          out_lines.append(line)
+                          continue
+
+                      m_simple = simple_binding_re.match(line)
+                      if m_simple:
+                          # "procedure :: name" → "procedure, non_overridable :: name"
+                          new_line = m_simple.group(1) + "procedure, non_overridable :: " + m_simple.group(2) + "\n"
+                          out_lines.append(new_line)
+                          file_nonoverr += 1
+                          continue
+
+                      m_attr = attr_binding_re.match(line)
+                      if m_attr:
+                          attrs = m_attr.group(2).strip()
+                          if already_nonoverr_re.search(attrs):
+                              out_lines.append(line)
+                              continue
+                          new_line = (
+                              m_attr.group(1)
+                              + "procedure, "
+                              + attrs
+                              + ", non_overridable :: "
+                              + m_attr.group(3)
+                              + "\n"
+                          )
+                          out_lines.append(new_line)
+                          file_nonoverr += 1
+                          continue
+
+                  out_lines.append(line)
+
+              # Now do class() -> type() replacements on the joined content
+              joined = "".join(out_lines)
 
               def repl(m):
                   name = m.group(1)
-                  if name in protected:
+                  if name in protected or name in abstract_types:
                       return m.group(0)
                   return f"type({name})"
 
-              new_content, n = class_re.subn(repl, content)
-              if n > 0:
+              new_joined, n = class_re.subn(repl, joined)
+              file_class_swaps = n
+
+              if file_class_swaps > 0 or file_nonoverr > 0:
                   with open(path, "w") as fh:
-                      fh.write(new_content)
+                      fh.write(new_joined)
                   files_changed += 1
-                  total_replacements += n
-                  print(f"  {path}: {n} replacements")
+                  total_class_swaps += file_class_swaps
+                  total_nonoverr += file_nonoverr
+                  if file_nonoverr > 0:
+                      print(f"  {path}: class->type={file_class_swaps}  non_overridable={file_nonoverr}")
 
           print()
-          print(f"Total files changed: {files_changed}")
-          print(f"Total class() -> type() replacements: {total_replacements}")
+          print(f"Files changed: {files_changed}")
+          print(f"class() -> type() swaps: {total_class_swaps}")
+          print(f"non_overridable additions: {total_nonoverr}")
           PYEOF
 
-      - name: Show diff of devirtualized files
+      - name: Sample diff
         if: always()
         run: |
-          echo "=== git diff summary ==="
-          git diff --stat || true
+          echo "=== src/ptb/data.f90 diff (around binding) ==="
+          git diff src/ptb/data.f90 | head -n 60 || true
           echo ""
-          echo "=== Sample diff for basisset.f90 and atomlist.f90 ==="
-          git diff src/type/basisset.f90 src/type/atomlist.f90 || true
+          echo "=== src/type/atomlist.f90 diff (binding area) ==="
+          git diff src/type/atomlist.f90 | head -n 40 || true
 
       - name: Reconfigure build to pick up patches
         run: |
