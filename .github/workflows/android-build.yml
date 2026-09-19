@@ -82,6 +82,9 @@ jobs:
           for arg in "\$@"; do
             case "\$arg" in
               -Werror=*) ;;
+              -Wl,--no-undefined) ;;
+              -Wl,--fatal-warnings) ;;
+              -Wl,--unresolved-symbols=*) ;;
               *) FILTERED+=("\$arg") ;;
             esac
           done
@@ -108,14 +111,15 @@ jobs:
               -B"${{ env.NDK_BIN }}" \\
               -fuse-ld=lld \\
               -L"$ANDROID_LIB_DIR" \\
-              -Wl,--no-as-needed \\
-              -Wl,--unresolved-symbols=ignore-in-object-files \\
+              -Wl,-rpath-link,"$ANDROID_LIB_DIR" \\
               "\${FILTERED[@]}" \\
               /tmp/fortran_shim.o \\
               -lc++_shared \\
-              -lc -lm -ldl -llog \\
+              -lc -lm -ldl -llog -latomic \\
               -Wl,--no-as-needed \\
-              -lc -lm -ldl -llog
+              -lc -lm -ldl -llog -latomic \\
+              -Wl,--unresolved-symbols=ignore-in-shared-libs \\
+              -Wl,--warn-unresolved-symbols
           fi
           EOF
           chmod +x flang-wrapper.sh
@@ -127,7 +131,6 @@ jobs:
           tar xzf v3.12.0.tar.gz
           cd lapack-3.12.0
 
-          # Remove BOTH add_subdirectory(LAPACKE) and add_subdirectory(LAPACKE/include)
           sed -i '/add_subdirectory(LAPACKE/d' CMakeLists.txt
 
           echo "=== CMakeLists.txt after patch ==="
