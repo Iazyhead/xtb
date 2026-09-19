@@ -17,9 +17,6 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install Meson, Ninja, and CMake
-        run: pip install meson ninja cmake
-
       - name: Download Android NDK
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
@@ -59,7 +56,7 @@ jobs:
           echo "FLANG_INC_DIR=$FLANG_INC_DIR" >> $GITHUB_ENV
           echo "RUNTIME_LIBS=$PWD/runtime-libs" >> $GITHUB_ENV
 
-      - name: Build shim and Flang wrapper
+      - name: Build shim and Flang wrappers
         run: |
           NDK_TOOLCHAIN="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$NDK_TOOLCHAIN/sysroot"
@@ -75,30 +72,22 @@ jobs:
           C
           "${{ env.NDK_BIN }}/aarch64-linux-android21-clang" -c /tmp/fortran_shim.c -o /tmp/fortran_shim.o
 
+          # Wrapper WITH ignore-missing-type-desc (default)
           cat > flang-wrapper.sh << EOF
           #!/bin/bash
           export LD_LIBRARY_PATH="${{ env.RUNTIME_LIBS }}:${{ env.FLANG_LIB_DIR }}:\$LD_LIBRARY_PATH"
           export PATH="${{ env.NDK_BIN }}:\$PATH"
-
           FILTERED=()
           for arg in "\$@"; do
             case "\$arg" in
-              -Werror=*) ;;
-              -Wl,--no-undefined) ;;
-              -Wl,--fatal-warnings) ;;
-              -Wl,--unresolved-symbols=*) ;;
+              -Werror=*|-Wl,--no-undefined|-Wl,--fatal-warnings|-Wl,--unresolved-symbols=*) ;;
               *) FILTERED+=("\$arg") ;;
             esac
           done
-
           COMPILE_ONLY=0
           for arg in "\${FILTERED[@]}"; do
-            if [[ "\$arg" == "-c" || "\$arg" == "-E" || "\$arg" == "-S" ]]; then
-              COMPILE_ONLY=1
-              break
-            fi
+            if [[ "\$arg" == "-c" || "\$arg" == "-E" || "\$arg" == "-S" ]]; then COMPILE_ONLY=1; break; fi
           done
-
           if [[ \$COMPILE_ONLY -eq 1 ]]; then
             exec "${{ env.FLANG_BIN }}" \\
               --target=aarch64-linux-android21 \\
@@ -129,7 +118,13 @@ jobs:
           fi
           EOF
           chmod +x flang-wrapper.sh
+
+          # Wrapper WITHOUT ignore-missing-type-desc
+          sed 's/-mllvm -ignore-missing-type-desc //g' flang-wrapper.sh > flang-wrapper-strict.sh
+          chmod +x flang-wrapper-strict.sh
+
           echo "FLANG_WRAPPER=$PWD/flang-wrapper.sh" >> $GITHUB_ENV
+          echo "FLANG_WRAPPER_STRICT=$PWD/flang-wrapper-strict.sh" >> $GITHUB_ENV
 
       - name: Replace intrinsic modules with aarch64-safe stubs
         run: |
@@ -312,11 +307,9 @@ jobs:
             use ieee_exceptions
             implicit none
             private
-
             type :: ieee_class_type
               integer :: c = 0
             end type
-
             type(ieee_class_type), parameter :: ieee_quiet_nan = ieee_class_type(1)
             type(ieee_class_type), parameter :: ieee_signaling_nan = ieee_class_type(2)
             type(ieee_class_type), parameter :: ieee_positive_inf = ieee_class_type(3)
@@ -327,7 +320,6 @@ jobs:
             type(ieee_class_type), parameter :: ieee_negative_denormal = ieee_class_type(8)
             type(ieee_class_type), parameter :: ieee_positive_normal = ieee_class_type(9)
             type(ieee_class_type), parameter :: ieee_negative_normal = ieee_class_type(10)
-
             public :: ieee_class_type, ieee_value
             public :: ieee_quiet_nan, ieee_signaling_nan, ieee_positive_inf
             public :: ieee_negative_inf, ieee_positive_zero, ieee_negative_zero
@@ -336,7 +328,6 @@ jobs:
             public :: ieee_is_nan, ieee_is_finite, ieee_is_normal
             public :: ieee_is_negative, ieee_is_positive
             public :: ieee_unordered
-
             interface ieee_value
               module procedure ieee_value_r4, ieee_value_r8
             end interface
@@ -424,57 +415,37 @@ jobs:
             "${{ env.FLANG_WRAPPER }}" -I. -c "${m}.f90" -o "${m}.o" 2>&1 | head -n 5
             if [ -f "${m}.mod" ]; then echo "OK: ${m}.mod"; else echo "FAIL: ${m}.mod"; fi
           done
-
           for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
-            if [ -f "${m}.mod" ]; then
-              cp -v "${m}.mod" "${{ env.FLANG_INC_DIR }}/${m}.mod"
-            fi
+            if [ -f "${m}.mod" ]; then cp -v "${m}.mod" "${{ env.FLANG_INC_DIR }}/${m}.mod"; fi
           done
 
-      - name: TEST Flang binding + codegen variants
+      - name: TEST class() receiver + non_overridable variants
         run: |
           run_test() {
             local name="$1"
             local file="$2"
+            local wrapper="$3"
             echo "================================================================"
             echo "$name"
+            echo "  wrapper: $(basename $wrapper)"
             echo "================================================================"
-            "${{ env.FLANG_WRAPPER }}" -c "$file" -o "${file%.f90}.o" 2>&1 | head -n 15
+            "$wrapper" -c "$file" -o "${file%.f90}.o" 2>&1 | head -n 12
             if [ -f "${file%.f90}.o" ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
             echo ""
           }
 
-          # TEST A: non_extensible + class() receiver + binding (compile only)
-          cat > /tmp/tA.f90 << 'EOF'
-          module tA_mod
+          # V1: class() receiver + non_overridable + type() call site
+          cat > /tmp/v1.f90 << 'EOF'
+          module v1_mod
             implicit none
-            type, non_extensible :: TMy
+            type :: TMy
               integer :: x = 0
             contains
-              procedure :: init
+              procedure, non_overridable :: init
             end type
           contains
             subroutine init(self, v)
               class(TMy), intent(inout) :: self
-              integer, intent(in) :: v
-              self%x = v
-            end subroutine
-          end module
-          EOF
-          run_test "TEST A: non_extensible + class() receiver" /tmp/tA.f90
-
-          # TEST B: non_extensible + type() receiver + binding + codegen (call site)
-          cat > /tmp/tB.f90 << 'EOF'
-          module tB_mod
-            implicit none
-            type, non_extensible :: TMy
-              integer :: x = 0
-            contains
-              procedure :: init
-            end type
-          contains
-            subroutine init(self, v)
-              type(TMy), intent(inout) :: self
               integer, intent(in) :: v
               self%x = v
             end subroutine
@@ -484,16 +455,16 @@ jobs:
             end subroutine
           end module
           EOF
-          run_test "TEST B: non_extensible + type() receiver + call site" /tmp/tB.f90
+          run_test "V1: class recv + non_overridable + type call site" /tmp/v1.f90 "${{ env.FLANG_WRAPPER }}"
 
-          # TEST C: non_extensible + class() receiver + binding + codegen (call site)
-          cat > /tmp/tC.f90 << 'EOF'
-          module tC_mod
+          # V2: same as V1 but class() call site
+          cat > /tmp/v2.f90 << 'EOF'
+          module v2_mod
             implicit none
-            type, non_extensible :: TMy
+            type :: TMy
               integer :: x = 0
             contains
-              procedure :: init
+              procedure, non_overridable :: init
             end type
           contains
             subroutine init(self, v)
@@ -507,35 +478,22 @@ jobs:
             end subroutine
           end module
           EOF
-          run_test "TEST C: non_extensible + class() receiver + call site" /tmp/tC.f90
+          run_test "V2: class recv + non_overridable + class call site" /tmp/v2.f90 "${{ env.FLANG_WRAPPER }}"
 
-          # TEST D: bare 'type, non_extensible' vs 'type, public, non_extensible'
-          cat > /tmp/tD.f90 << 'EOF'
-          module tD_mod
-            implicit none
-            type, public, non_extensible :: TMy
-              integer :: x = 0
-            contains
-              procedure :: init
-            end type
-          contains
-            subroutine init(self, v)
-              type(TMy), intent(inout) :: self
-              integer, intent(in) :: v
-              self%x = v
-            end subroutine
-          end module
-          EOF
-          run_test "TEST D: type, public, non_extensible" /tmp/tD.f90
+          # V3: same as V1 but WITHOUT ignore-missing-type-desc
+          run_test "V3: same as V1 but strict wrapper" /tmp/v1.f90 "${{ env.FLANG_WRAPPER_STRICT }}"
 
-          # TEST E: nopass fallback with call site — verify syntax
-          cat > /tmp/tE.f90 << 'EOF'
-          module tE_mod
+          # V4: same as V2 but WITHOUT ignore-missing-type-desc
+          run_test "V4: same as V2 but strict wrapper" /tmp/v2.f90 "${{ env.FLANG_WRAPPER_STRICT }}"
+
+          # V5: type() receiver + non_overridable + type() call site (known to fail, control)
+          cat > /tmp/v5.f90 << 'EOF'
+          module v5_mod
             implicit none
             type :: TMy
               integer :: x = 0
             contains
-              procedure, nopass, non_overridable :: init
+              procedure, non_overridable :: init
             end type
           contains
             subroutine init(self, v)
@@ -545,14 +503,16 @@ jobs:
             end subroutine
             subroutine caller(obj)
               type(TMy), intent(inout) :: obj
-              call obj%init(obj, 5)
+              call obj%init(5)
             end subroutine
           end module
           EOF
-          run_test "TEST E: nopass + explicit self + call site" /tmp/tE.f90
+          run_test "V5: type recv + non_overridable + type call site (control)" /tmp/v5.f90 "${{ env.FLANG_WRAPPER }}"
 
           echo "================================================================"
           echo "SUMMARY"
           echo "================================================================"
-          echo "If TEST B passes: we can add 'non_extensible' everywhere and keep original syntax."
-          echo "If TEST E passes and B fails: we must convert to nopass and rewrite call sites."
+          echo "V1 PASS  => we only need to add non_overridable and keep class() receivers (minimal change)"
+          echo "V2 PASS  => polymorphic call sites also work"
+          echo "V3/V4    => shows whether -ignore-missing-type-desc matters"
+          echo "V5 FAIL  => expected (control)"
