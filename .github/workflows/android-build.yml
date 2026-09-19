@@ -31,22 +31,17 @@ jobs:
           wget -O toolchain.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-install.tar.bz2
           tar -xjf toolchain.tar.bz2
           
-          echo "--- Searching for flang binary ---"
-          FLANG_PATH=$(find $PWD -name 'aarch64-linux-android-flang' | head -n 1)
+          echo "===== TOP LEVEL DIRECTORY ====="
+          ls -la
           
-          if [ -z "$FLANG_PATH" ]; then
-            echo "ERROR: Could not find aarch64-linux-android-flang in the extracted files."
-            echo "Here is what was extracted:"
-            ls -la
-            exit 1
-          fi
+          echo "===== ALL FILES NAMED *flang* ====="
+          find . -iname '*flang*' -type f 2>/dev/null | head -50
           
-          echo "Found flang at: $FLANG_PATH"
-          FLANG_BIN_DIR=$(dirname "$FLANG_PATH")
-          FLANG_TOOLCHAIN=$(dirname "$FLANG_BIN_DIR")
+          echo "===== ALL FILES IN ANY bin/ FOLDER ====="
+          find . -type d -name bin 2>/dev/null
           
-          echo "FLANG_TOOLCHAIN=$FLANG_TOOLCHAIN" >> $GITHUB_ENV
-          echo "Detected FLANG_TOOLCHAIN: $FLANG_TOOLCHAIN"
+          echo "===== DONE ====="
+          exit 1
 
       - name: Create Meson cross-file
         run: |
