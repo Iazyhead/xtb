@@ -105,7 +105,6 @@ jobs:
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
               -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \\
-              -mllvm -ignore-missing-type-desc \\
               "\${FILTERED[@]}"
           else
             exec "${{ env.FLANG_BIN }}" \\
@@ -113,7 +112,6 @@ jobs:
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
               -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \\
-              -mllvm -ignore-missing-type-desc \\
               -B"${{ env.NDK_BIN }}" \\
               -fuse-ld=lld \\
               -L"$ANDROID_LIB_DIR" \\
@@ -512,13 +510,9 @@ jobs:
             exit 1
           fi
 
-          echo "=== Original jonquil declaration ==="
-          grep -B2 -A6 "jonquil" "$F" || echo "(no jonquil references)"
-
           sed -i "s|required: get_option('json'),|required: false,|" "$F"
           sed -i "/fallback: \['jonquil','jonquil_dep'\],/d" "$F"
 
-          echo ""
           echo "=== Patched jonquil declaration ==="
           grep -B2 -A6 "jonquil" "$F" || echo "(no jonquil references — GOOD)"
 
@@ -530,17 +524,22 @@ jobs:
             exit 1
           }
 
-      - name: Inspect mctc-lib config after patch
+      - name: Dump ncoord/type.f90 for inspection
         if: always()
         run: |
-          echo "=== Patched config/meson.build ==="
-          cat subprojects/mctc-lib/config/meson.build
+          F=subprojects/mctc-lib/src/mctc/ncoord/type.f90
+          if [ ! -f "$F" ]; then
+            echo "(ncoord/type.f90 not found)"
+            exit 0
+          fi
+          echo "=== ncoord/type.f90: lines 1-120 ==="
+          sed -n '1,120p' "$F"
           echo ""
-          echo "=== Is toml-f directory present? ==="
-          ls -la subprojects/toml-f/ 2>/dev/null | head -n 5 || echo "(not present — GOOD, we didn't fetch it)"
+          echo "=== ncoord/type.f90: lines 121-220 ==="
+          sed -n '121,220p' "$F"
           echo ""
-          echo "=== Is jonquil directory present? ==="
-          ls -la subprojects/jonquil/ 2>/dev/null | head -n 5 || echo "(not present — GOOD)"
+          echo "=== All 'type', 'abstract', 'procedure', 'class(' references ==="
+          grep -nE "abstract|procedure|class\(|class *\*|deferred|select type" "$F" || true
 
       - name: Build project
         run: meson compile -C builddir
