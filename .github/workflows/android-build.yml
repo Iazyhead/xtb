@@ -36,11 +36,23 @@ jobs:
           mkdir -p full-install
           tar -xjf full-install.tar.bz2 -C full-install
 
+          # Target package (may contain aarch64 Fortran runtime libs)
+          wget -q -O flang-aarch64.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-flang-aarch64.tar.bz2 || true
+          mkdir -p flang-aarch64
+          tar -xjf flang-aarch64.tar.bz2 -C flang-aarch64 2>/dev/null || true
+
+          echo "=== Contents of flang-aarch64 (top 40 files) ==="
+          find flang-aarch64 -type f 2>/dev/null | head -n 40
+
+          echo ""
+          echo "=== Looking for aarch64 Fortran runtime libs everywhere ==="
+          find $PWD -name 'libFortranRuntime.a' 2>/dev/null
+          find $PWD -name 'libFortranDecimal.a' 2>/dev/null
+
           FLANG_BIN=$(find $PWD/flang-host -type f -name 'flang-*' -executable | head -n 1)
           FLANG_LIB_DIR=$(dirname $(dirname "$FLANG_BIN"))/lib
           CLANG_DEV_LIB="$PWD/full-install/out/install/linux-x86/clang-dev/lib"
 
-          # Create a clean runtime lib directory with working symlinks
           mkdir -p runtime-libs
           ln -sf "$CLANG_DEV_LIB/x86_64-unknown-linux-gnu/libc++.so.1" runtime-libs/libc++.so
           ln -sf "$CLANG_DEV_LIB/x86_64-unknown-linux-gnu/libc++abi.so.1" runtime-libs/libc++abi.so
@@ -51,13 +63,6 @@ jobs:
           echo "FLANG_BIN=$FLANG_BIN" >> $GITHUB_ENV
           echo "FLANG_LIB_DIR=$FLANG_LIB_DIR" >> $GITHUB_ENV
           echo "RUNTIME_LIBS=$RUNTIME_LIBS" >> $GITHUB_ENV
-
-          echo "=== Runtime libs ==="
-          ls -la "$RUNTIME_LIBS"
-
-          echo ""
-          echo "=== Testing flang ==="
-          LD_LIBRARY_PATH="$RUNTIME_LIBS:$FLANG_LIB_DIR:$LD_LIBRARY_PATH" "$FLANG_BIN" --version 2>&1 | head -n 5
 
       - name: Create Flang wrapper
         run: |
@@ -80,18 +85,35 @@ jobs:
           chmod +x flang-wrapper.sh
           echo "FLANG_WRAPPER=$PWD/flang-wrapper.sh" >> $GITHUB_ENV
 
-          echo "=== Testing wrapper ==="
-          ./flang-wrapper.sh --version 2>&1 | head -n 5
-
-          echo ""
-          echo "=== Compiling a trivial Fortran file ==="
+      - name: Debug Flang compile and link
+        run: |
           cat > /tmp/test.f90 << 'FORT'
           program hello
-            print *, "hello from fortran"
+            print *, "hello"
           end program hello
           FORT
-          ./flang-wrapper.sh -c /tmp/test.f90 -o /tmp/test.o 2>&1 | head -n 20
-          ls -la /tmp/test.o 2>&1
+
+          echo "========================================"
+          echo "=== TEST 1: compile only (no link)  ==="
+          echo "========================================"
+          ./flang-wrapper.sh -c /tmp/test.f90 -o /tmp/test.o
+          echo "Exit code: $?"
+          ls -la /tmp/test.o 2>&1 || true
+
+          echo ""
+          echo "========================================"
+          echo "=== TEST 2: compile AND link        ==="
+          echo "========================================"
+          ./flang-wrapper.sh /tmp/test.f90 -o /tmp/test
+          echo "Exit code: $?"
+          ls -la /tmp/test 2>&1 || true
+          file /tmp/test 2>&1 || true
+
+          echo ""
+          echo "========================================"
+          echo "=== TEST 3: compile+link with -v     ==="
+          echo "========================================"
+          ./flang-wrapper.sh -v /tmp/test.f90 -o /tmp/test 2>&1 | tail -n 40
 
       - name: Create Meson cross-file
         run: |
@@ -126,7 +148,14 @@ jobs:
               -Dcustom_libraries= \
               -Dopenmp=false \
               -Dtblite=disabled \
-              -Dcpcmx=disabled
+              -Dcpcmx=disabled || {
+            echo ""
+            echo "========================================"
+            echo "=== MESON LOG (actual error)        ==="
+            echo "========================================"
+            cat builddir/meson-logs/meson-log.txt
+            exit 1
+          }
 
       - name: Build project
         run: meson compile -C builddir
