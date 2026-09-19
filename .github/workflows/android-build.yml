@@ -22,62 +22,76 @@ jobs:
 
       - name: Download Android NDK
         run: |
-          wget https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
-          unzip android-ndk-r27c-linux.zip
+          wget -q https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q android-ndk-r27c-linux.zip
           echo "ANDROID_NDK_HOME=$PWD/android-ndk-r27c" >> $GITHUB_ENV
 
-      - name: Download Flang Toolchain (Diagnostic)
+      - name: Download Flang
         run: |
-          # Download the correct Flang package
-          wget -O flang-host.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-flang-host.tar.bz2
+          wget -q -O flang-host.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-flang-host.tar.bz2
           tar -xjf flang-host.tar.bz2
-          
-          echo "========== TOP LEVEL =========="
-          ls -la
-          
-          echo ""
-          echo "========== ANY FILE WITH 'flang' (any type, case-insensitive) =========="
-          find . -iname '*flang*' 2>/dev/null
-          
-          echo ""
-          echo "========== ANY FILE WITH 'fortran' =========="
-          find . -iname '*fortran*' 2>/dev/null
-          
-          echo ""
-          echo "========== ALL bin DIRECTORIES =========="
-          find . -type d -name bin 2>/dev/null
-          
-          echo ""
-          echo "========== CONTENTS OF EACH bin/ (including symlinks) =========="
-          for d in $(find . -type d -name bin 2>/dev/null); do
-            echo "--- $d ---"
-            ls -la "$d"
-            echo ""
-          done
-          
-          echo "========== DONE =========="
-          
-          # Exit with 0 so the workflow succeeds and we can read the full log
-          exit 0
+          echo "FLANG_BIN=$PWD/build-host-install/bin/flang-21" >> $GITHUB_ENV
 
-      # The steps below are placeholders. They will fail if the diagnostic step
-      # doesn't find the compilers, but that's fine. We will fix them in the
-      # next iteration once we know the exact compiler paths.
+      - name: Create Flang wrapper
+        run: |
+          NDK_TOOLCHAIN="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64"
+          SYSROOT="$NDK_TOOLCHAIN/sysroot"
+          
+          cat > flang-wrapper.sh << EOF
+          #!/bin/bash
+          exec "${{ env.FLANG_BIN }}" \\
+              --target=aarch64-linux-android21 \\
+              --sysroot="$SYSROOT" \\
+              -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
+              -fuse-ld=lld \\
+              "\$@"
+          EOF
+          chmod +x flang-wrapper.sh
+          echo "FLANG_WRAPPER=$PWD/flang-wrapper.sh" >> $GITHUB_ENV
 
       - name: Create Meson cross-file
         run: |
-          echo "This step will be updated once we know the compiler paths."
+          NDK_BIN="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          
+          cat > android-arm64.ini << EOF
+          [binaries]
+          c = '${NDK_BIN}/aarch64-linux-android21-clang'
+          cpp = '${NDK_BIN}/aarch64-linux-android21-clang++'
+          fortran = '${{ env.FLANG_WRAPPER }}'
+          ar = '${NDK_BIN}/llvm-ar'
+          strip = '${NDK_BIN}/llvm-strip'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'aarch64'
+          endian = 'little'
+
+          [properties]
+          needs_exe_wrapper = true
+
+          [built-in options]
+          default_library = 'shared'
+          EOF
 
       - name: Configure build
         run: |
-          echo "This step will be updated once we know the compiler paths."
+          meson setup builddir \
+              --cross-file android-arm64.ini \
+              -Dlapack=custom \
+              -Dcustom_libraries= \
+              -Dopenmp=false \
+              -Dtblite=disabled \
+              -Dcpcmx=disabled
 
       - name: Build project
-        run: |
-          echo "This step will be updated once we know the compiler paths."
+        run: meson compile -C builddir
+
+      - name: Find built libraries
+        run: find builddir -name '*.so'
 
       - name: Upload libxtb.so
         uses: actions/upload-artifact@v4
         with:
           name: libxtb-android-arm64
-          path: builddir/src/libxtb.so
+          path: builddir/**/*.so
