@@ -43,6 +43,7 @@ jobs:
 
           FLANG_BIN=$(find $PWD/flang-host -type f -name 'flang-*' -executable | head -n 1)
           FLANG_LIB_DIR=$(dirname $(dirname "$FLANG_BIN"))/lib
+          FLANG_INC_DIR=$(dirname $(dirname "$FLANG_BIN"))/include/flang
           CLANG_DEV_LIB="$PWD/full-install/out/install/linux-x86/clang-dev/lib"
 
           mkdir -p runtime-libs
@@ -53,8 +54,19 @@ jobs:
           AARCH64_RUNTIME_LIB="$PWD/flang-aarch64/build-aarch64-install"
           cp -v "$AARCH64_RUNTIME_LIB"/libFortran*.a "$FLANG_LIB_DIR/"
 
+          # Patch flang's x86_64-built .mod files so they don't reference REAL(10)
+          # which doesn't exist on aarch64.
+          echo "=== Patching flang intrinsic .mod files ==="
+          echo "Flang include dir: $FLANG_INC_DIR"
+          ls -la "$FLANG_INC_DIR" | head -n 30
+          find "$FLANG_INC_DIR" -name '*.mod' -exec sed -i 's/real(10)/real(8)/gi' {} \;
+          echo ""
+          echo "=== Verifying patch applied ==="
+          grep -l 'real(10)' "$FLANG_INC_DIR"/*.mod 2>/dev/null && echo "WARNING: some .mod files still have real(10)" || echo "OK: no .mod file contains real(10)"
+
           echo "FLANG_BIN=$FLANG_BIN" >> $GITHUB_ENV
           echo "FLANG_LIB_DIR=$FLANG_LIB_DIR" >> $GITHUB_ENV
+          echo "FLANG_INC_DIR=$FLANG_INC_DIR" >> $GITHUB_ENV
           echo "RUNTIME_LIBS=$PWD/runtime-libs" >> $GITHUB_ENV
 
       - name: Build shim and Flang wrapper
@@ -102,12 +114,14 @@ jobs:
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
+              -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \\
               "\${FILTERED[@]}"
           else
             exec "${{ env.FLANG_BIN }}" \\
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
+              -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \\
               -B"${{ env.NDK_BIN }}" \\
               -fuse-ld=lld \\
               -L"$ANDROID_LIB_DIR" \\
@@ -132,14 +146,6 @@ jobs:
           cd lapack-3.12.0
 
           sed -i '/add_subdirectory(LAPACKE/d' CMakeLists.txt
-
-          echo "=== CMakeLists.txt after patch ==="
-          if grep -q 'add_subdirectory(LAPACKE' CMakeLists.txt; then
-            echo "WARNING: LAPACKE subdirs still present!"
-            grep -n 'add_subdirectory(LAPACKE' CMakeLists.txt
-          else
-            echo "OK: both LAPACKE subdirectory lines removed"
-          fi
 
           mkdir build && cd build
 
