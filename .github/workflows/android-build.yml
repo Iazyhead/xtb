@@ -131,502 +131,61 @@ jobs:
           chmod +x flang-wrapper.sh
           echo "FLANG_WRAPPER=$PWD/flang-wrapper.sh" >> $GITHUB_ENV
 
-      - name: Replace intrinsic modules with aarch64-safe stubs
+      - name: TEST type_desc handling flags
         run: |
-          mkdir -p intrinsic-modules
-          cd intrinsic-modules
-          mkdir -p "${{ env.FLANG_INC_DIR }}/backup"
-          cp "${{ env.FLANG_INC_DIR }}"/*.mod "${{ env.FLANG_INC_DIR }}/backup/" 2>/dev/null || true
-          rm -f "${{ env.FLANG_INC_DIR }}"/*.mod
-
-          cat > iso_fortran_env.f90 << 'FORT'
-          module iso_fortran_env
+          echo "================================================================"
+          echo "Reproducer: concrete -> polymorphic allocatable assignment"
+          echo "================================================================"
+          cat > /tmp/td.f90 << 'EOF'
+          module td_mod
             implicit none
-            private
-            public :: int8, int16, int32, int64
-            public :: real32, real64, real128
-            public :: input_unit, output_unit, error_unit
-            public :: iostat_end, iostat_eor, iostat_inquire_internal_unit
-            public :: character_storage_size, file_storage_size, numeric_storage_size
-            integer, parameter :: int8 = 1, int16 = 2, int32 = 4, int64 = 8
-            integer, parameter :: real32 = 4, real64 = 8, real128 = 16
-            integer, parameter :: input_unit = 5, output_unit = 6, error_unit = 0
-            integer, parameter :: iostat_end = -1, iostat_eor = -2
-            integer, parameter :: iostat_inquire_internal_unit = 0
-            integer, parameter :: character_storage_size = 8, file_storage_size = 8, numeric_storage_size = 32
-          end module iso_fortran_env
-          FORT
-
-          cat > iso_c_binding.f90 << 'FORT'
-          module iso_c_binding
-            implicit none
-            private
-            public :: c_int, c_short, c_long, c_long_long, c_signed_char
-            public :: c_size_t, c_int8_t, c_int16_t, c_int32_t, c_int64_t
-            public :: c_float, c_double, c_long_double, c_bool, c_char
-            public :: c_ptr, c_funptr, c_null_ptr, c_null_funptr
-            public :: c_associated, c_f_pointer, c_loc, c_funloc
-            public :: c_null_char, c_alert, c_backspace, c_form_feed
-            public :: c_new_line, c_carriage_return, c_horizontal_tab, c_vertical_tab
-            integer, parameter :: c_int = 4, c_short = 2, c_long = 8, c_long_long = 8
-            integer, parameter :: c_signed_char = 1, c_size_t = 8
-            integer, parameter :: c_int8_t = 1, c_int16_t = 2, c_int32_t = 4, c_int64_t = 8
-            integer, parameter :: c_float = 4, c_double = 8, c_long_double = 16, c_bool = 1, c_char = 1
-            type :: c_ptr
-              integer(kind=8) :: i = 0
-            end type c_ptr
-            type :: c_funptr
-              integer(kind=8) :: i = 0
-            end type c_funptr
-            type(c_ptr), parameter :: c_null_ptr = c_ptr(0)
-            type(c_funptr), parameter :: c_null_funptr = c_funptr(0)
-            character(kind=1, len=1), parameter :: c_null_char = char(0)
-            character(kind=1, len=1), parameter :: c_alert = char(7)
-            character(kind=1, len=1), parameter :: c_backspace = char(8)
-            character(kind=1, len=1), parameter :: c_form_feed = char(12)
-            character(kind=1, len=1), parameter :: c_new_line = char(10)
-            character(kind=1, len=1), parameter :: c_carriage_return = char(13)
-            character(kind=1, len=1), parameter :: c_horizontal_tab = char(9)
-            character(kind=1, len=1), parameter :: c_vertical_tab = char(11)
-          contains
-            logical function c_associated(cptr) result(r)
-              type(c_ptr), intent(in) :: cptr
-              r = cptr%i /= 0
-            end function
-            function c_loc(x) result(r)
-              type(c_ptr) :: r
-              class(*), target, intent(in) :: x
-              r = c_ptr(0)
-            end function
-            function c_funloc(x) result(r)
-              type(c_funptr) :: r
-              procedure(), pointer, intent(in) :: x
-              r = c_funptr(0)
-            end function
-            subroutine c_f_pointer(cptr, fptr)
-              type(c_ptr), intent(in) :: cptr
-              integer, pointer, intent(out) :: fptr
-              fptr => null()
-            end subroutine
-          end module iso_c_binding
-          FORT
-
-          cat > ieee_features.f90 << 'FORT'
-          module ieee_features
-            implicit none
-            integer, parameter :: ieee_datatype = 1, ieee_denormal = 2, ieee_divide = 3
-            integer, parameter :: ieee_halting = 4, ieee_inexact_flag = 5, ieee_inf = 6
-            integer, parameter :: ieee_invalid_flag = 7, ieee_nan = 8, ieee_rounding = 9
-            integer, parameter :: ieee_sqrt = 10, ieee_subnormal = 11
-            integer, parameter :: ieee_underflow_flag = 12, ieee_overflow_flag = 13, ieee_usercall = 14
-          end module ieee_features
-          FORT
-
-          cat > ieee_exceptions.f90 << 'FORT'
-          module ieee_exceptions
-            use iso_fortran_env, only: real32, real64
-            implicit none
-            private
-            public :: ieee_flag_type, ieee_invalid, ieee_overflow, ieee_divide_by_zero
-            public :: ieee_underflow, ieee_inexact, ieee_usual, ieee_all
-            public :: ieee_get_flag, ieee_set_flag, ieee_get_halting_mode
-            public :: ieee_set_halting_mode, ieee_support_flag, ieee_support_halting
-            type :: ieee_flag_type
-              integer :: flag = 0
+            type, abstract :: TBase
             end type
-            type(ieee_flag_type), parameter :: ieee_invalid = ieee_flag_type(1)
-            type(ieee_flag_type), parameter :: ieee_overflow = ieee_flag_type(2)
-            type(ieee_flag_type), parameter :: ieee_divide_by_zero = ieee_flag_type(3)
-            type(ieee_flag_type), parameter :: ieee_underflow = ieee_flag_type(4)
-            type(ieee_flag_type), parameter :: ieee_inexact = ieee_flag_type(5)
-            type(ieee_flag_type), parameter :: ieee_usual(3) = [ieee_overflow, ieee_divide_by_zero, ieee_invalid]
-            type(ieee_flag_type), parameter :: ieee_all(5) = [ieee_overflow, ieee_divide_by_zero, ieee_invalid, ieee_underflow, ieee_inexact]
-          contains
-            subroutine ieee_get_flag(flag, value)
-              type(ieee_flag_type), intent(in) :: flag
-              logical, intent(out) :: value
-              value = .false.
-            end subroutine
-            subroutine ieee_set_flag(flag, value)
-              type(ieee_flag_type), intent(in) :: flag
-              logical, intent(in) :: value
-            end subroutine
-            subroutine ieee_get_halting_mode(flag, halting)
-              type(ieee_flag_type), intent(in) :: flag
-              logical, intent(out) :: halting
-              halting = .false.
-            end subroutine
-            subroutine ieee_set_halting_mode(flag, halting)
-              type(ieee_flag_type), intent(in) :: flag
-              logical, intent(in) :: halting
-            end subroutine
-            subroutine ieee_support_flag(flag, x)
-              type(ieee_flag_type), intent(in) :: flag
-              real(real32), intent(in) :: x
-            end subroutine
-            subroutine ieee_support_halting(flag, halting)
-              type(ieee_flag_type), intent(in) :: flag
-              logical, intent(out) :: halting
-              halting = .false.
-            end subroutine
-          end module ieee_exceptions
-          FORT
-
-          cat > ieee_arithmetic.f90 << 'FORT'
-          module ieee_arithmetic
-            use iso_fortran_env, only: real32, real64
-            use ieee_features
-            use ieee_exceptions
-            implicit none
-            private
-            type :: ieee_class_type
-              integer :: c = 0
+            type, extends(TBase) :: TSub
+              integer :: x = 0
             end type
-            type(ieee_class_type), parameter :: ieee_quiet_nan = ieee_class_type(1)
-            type(ieee_class_type), parameter :: ieee_signaling_nan = ieee_class_type(2)
-            type(ieee_class_type), parameter :: ieee_positive_inf = ieee_class_type(3)
-            type(ieee_class_type), parameter :: ieee_negative_inf = ieee_class_type(4)
-            type(ieee_class_type), parameter :: ieee_positive_zero = ieee_class_type(5)
-            type(ieee_class_type), parameter :: ieee_negative_zero = ieee_class_type(6)
-            type(ieee_class_type), parameter :: ieee_positive_denormal = ieee_class_type(7)
-            type(ieee_class_type), parameter :: ieee_negative_denormal = ieee_class_type(8)
-            type(ieee_class_type), parameter :: ieee_positive_normal = ieee_class_type(9)
-            type(ieee_class_type), parameter :: ieee_negative_normal = ieee_class_type(10)
-            public :: ieee_class_type, ieee_value
-            public :: ieee_quiet_nan, ieee_signaling_nan, ieee_positive_inf, ieee_negative_inf
-            public :: ieee_positive_zero, ieee_negative_zero, ieee_positive_denormal, ieee_negative_denormal
-            public :: ieee_positive_normal, ieee_negative_normal
-            public :: ieee_is_nan, ieee_is_finite, ieee_is_normal, ieee_is_negative, ieee_is_positive, ieee_unordered
-            interface ieee_value
-              module procedure ieee_value_r4, ieee_value_r8
-            end interface
-            interface ieee_is_nan
-              module procedure ieee_is_nan_r4, ieee_is_nan_r8
-            end interface
-            interface ieee_is_finite
-              module procedure ieee_is_finite_r4, ieee_is_finite_r8
-            end interface
-            interface ieee_is_normal
-              module procedure ieee_is_normal_r4, ieee_is_normal_r8
-            end interface
-            interface ieee_is_negative
-              module procedure ieee_is_negative_r4, ieee_is_negative_r8
-            end interface
-            interface ieee_is_positive
-              module procedure ieee_is_positive_r4, ieee_is_positive_r8
-            end interface
-            interface ieee_unordered
-              module procedure ieee_unordered_r4, ieee_unordered_r8
-            end interface
           contains
-            real(real32) function ieee_value_r4(x, class) result(r)
-              real(real32), intent(in) :: x
-              type(ieee_class_type), intent(in) :: class
-              r = x
-            end function
-            real(real64) function ieee_value_r8(x, class) result(r)
-              real(real64), intent(in) :: x
-              type(ieee_class_type), intent(in) :: class
-              r = x
-            end function
-            logical function ieee_is_nan_r4(x) result(r)
-              real(real32), intent(in) :: x
-              r = (x /= x)
-            end function
-            logical function ieee_is_nan_r8(x) result(r)
-              real(real64), intent(in) :: x
-              r = (x /= x)
-            end function
-            logical function ieee_is_finite_r4(x) result(r)
-              real(real32), intent(in) :: x
-              r = (x == x) .and. (abs(x) < huge(x))
-            end function
-            logical function ieee_is_finite_r8(x) result(r)
-              real(real64), intent(in) :: x
-              r = (x == x) .and. (abs(x) < huge(x))
-            end function
-            logical function ieee_is_normal_r4(x) result(r)
-              real(real32), intent(in) :: x
-              r = (x == x) .and. (abs(x) <= huge(x)) .and. (x /= 0.0_real32)
-            end function
-            logical function ieee_is_normal_r8(x) result(r)
-              real(real64), intent(in) :: x
-              r = (x == x) .and. (abs(x) <= huge(x)) .and. (x /= 0.0_real64)
-            end function
-            logical function ieee_is_negative_r4(x) result(r)
-              real(real32), intent(in) :: x
-              r = x < 0.0_real32
-            end function
-            logical function ieee_is_negative_r8(x) result(r)
-              real(real64), intent(in) :: x
-              r = x < 0.0_real64
-            end function
-            logical function ieee_is_positive_r4(x) result(r)
-              real(real32), intent(in) :: x
-              r = x > 0.0_real32
-            end function
-            logical function ieee_is_positive_r8(x) result(r)
-              real(real64), intent(in) :: x
-              r = x > 0.0_real64
-            end function
-            logical function ieee_unordered_r4(x, y) result(r)
-              real(real32), intent(in) :: x, y
-              r = (x /= x) .or. (y /= y)
-            end function
-            logical function ieee_unordered_r8(x, y) result(r)
-              real(real64), intent(in) :: x, y
-              r = (x /= x) .or. (y /= y)
-            end function
-          end module ieee_arithmetic
-          FORT
-
-          for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
-            "${{ env.FLANG_WRAPPER }}" -I. -c "${m}.f90" -o "${m}.o" 2>&1 | head -n 5
-            if [ -f "${m}.mod" ]; then echo "OK: ${m}.mod"; else echo "FAIL: ${m}.mod"; fi
-          done
-          for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
-            if [ -f "${m}.mod" ]; then cp -v "${m}.mod" "${{ env.FLANG_INC_DIR }}/${m}.mod"; fi
-          done
-
-      - name: Build LAPACK for aarch64 Android
-        run: |
-          wget -q https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v3.12.0.tar.gz
-          tar xzf v3.12.0.tar.gz
-          cd lapack-3.12.0
-          sed -i '/add_subdirectory(LAPACKE/d' CMakeLists.txt
-          mkdir build && cd build
-          cmake .. \
-            -DCMAKE_SYSTEM_NAME=Android -DCMAKE_SYSTEM_VERSION=21 \
-            -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
-            -DCMAKE_ANDROID_NDK="${{ env.ANDROID_NDK_HOME }}" \
-            -DCMAKE_Fortran_COMPILER="${{ env.FLANG_WRAPPER }}" \
-            -DCMAKE_C_COMPILER="${{ env.NDK_BIN }}/aarch64-linux-android21-clang" \
-            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF \
-            -DLAPACKE=OFF -DBUILD_LAPACKE=OFF -DCBLAS=OFF \
-            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-            -DCMAKE_Fortran_COMPILER_WORKS=1 -DCMAKE_C_COMPILER_WORKS=1 \
-            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/lapack-install"
-          make -j$(nproc)
-          make install
-
-      - name: Create Meson cross-file
-        run: |
-          cat > android-arm64.ini << EOF
-          [binaries]
-          c = '${{ env.NDK_BIN }}/aarch64-linux-android21-clang'
-          cpp = '${{ env.NDK_BIN }}/aarch64-linux-android21-clang++'
-          fortran = '${{ env.FLANG_WRAPPER }}'
-          ar = '${{ env.NDK_BIN }}/llvm-ar'
-          strip = '${{ env.NDK_BIN }}/llvm-strip'
-
-          [host_machine]
-          system = 'android'
-          cpu_family = 'aarch64'
-          cpu = 'aarch64'
-          endian = 'little'
-
-          [properties]
-          needs_exe_wrapper = true
-
-          [built-in options]
-          default_library = 'shared'
+            subroutine make(obj)
+              class(TBase), allocatable, intent(out) :: obj
+              type(TSub), allocatable :: tmp
+              allocate(tmp)
+              tmp%x = 42
+              obj = tmp
+            end subroutine
+          end module
           EOF
 
-      - name: Configure build
-        run: |
-          LAPACK_DIR="$GITHUB_WORKSPACE/lapack-install"
-          meson setup builddir \
-              --cross-file android-arm64.ini \
-              -Dlapack=custom \
-              -Dcustom_libraries="-L${LAPACK_DIR}/lib,lapack,blas" \
-              -Dopenmp=false -Dtblite=disabled -Dcpcmx=disabled || {
-            echo "=== MESON LOG ==="
-            cat builddir/meson-logs/meson-log.txt
-            exit 1
+          run_test() {
+            local name="$1"
+            shift
+            echo "================================================================"
+            echo "$name"
+            echo "  extra flags: $@"
+            echo "================================================================"
+            "${{ env.FLANG_BIN }}" \
+              --target=aarch64-linux-android21 \
+              --sysroot="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot" \
+              -resource-dir="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18" \
+              -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \
+              -mllvm -ignore-missing-type-desc \
+              "$@" -c /tmp/td.f90 -o /tmp/td.o 2>&1 | head -n 8
+            if [ -f /tmp/td.o ]; then echo "RESULT: PASS"; rm -f /tmp/td.o; else echo "RESULT: FAIL"; fi
+            echo ""
           }
 
-      - name: Patch mctc-lib JSON + ncoord
-        run: |
-          F=subprojects/mctc-lib/config/meson.build
-          sed -i "s|required: get_option('json'),|required: false,|" "$F"
-          sed -i "/fallback: \['jonquil','jonquil_dep'\],/d" "$F"
-          find subprojects/mctc-lib -name 'meson.build' -exec sed -i '/ncoord/ s|^|# DISABLED-NCOORD: |' {} \;
+          run_test "Baseline (current flags)"
+          run_test "With: -mllvm -polymorphic-type-descriptor-mode=disabled" -mllvm -polymorphic-type-descriptor-mode=disabled
+          run_test "With: -mllvm -polymorphic-type-descriptor-mode=none" -mllvm -polymorphic-type-descriptor-mode=none
+          run_test "With: -mllvm -polymorphic-type-descriptor-mode=in-module" -mllvm -polymorphic-type-descriptor-mode=in-module
+          run_test "With: -fno-rtti" -fno-rtti
+          run_test "With: -fno-emit-type-desc" -fno-emit-type-desc
+          run_test "With: -mllvm -disable-polymorphic-type-descriptors" -mllvm -disable-polymorphic-type-descriptors
+          run_test "With: -mllvm -flang-only-use-static-type-descs" -mllvm -flang-only-use-static-type-descs
 
-      - name: Exclude model_hessian from build
-        run: |
-          sed -i "/subdir('model_hessian')/ s|^|# DISABLED-MODELHESS: |" src/meson.build
-          grep -n "model_hessian" src/meson.build || true
-
-      - name: Add non_overridable EXCEPT where overridden in subclasses
-        run: |
-          python3 - << 'PYEOF'
-          import re
-          import os
-
-          ROOTS = ["src", "subprojects/mctc-lib/src"]
-          EXTS = (".f90", ".F90", ".f", ".F", ".f95", ".F95")
-
-          all_source = []
-          for root in ROOTS:
-              for dp, _, fns in os.walk(root):
-                  for fn in fns:
-                      if fn.endswith(EXTS):
-                          all_source.append(os.path.join(dp, fn))
-
-          type_decl_re = re.compile(
-              r"^\s*type\s*(?!\()\s*(?:,\s*[^:]+?)?\s*(?:::)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:!.*)?$",
-              re.IGNORECASE)
-          end_type_re = re.compile(r"^\s*end\s*type\b", re.IGNORECASE)
-          extends_re = re.compile(r"\bextends\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", re.IGNORECASE)
-          simple_re = re.compile(r"^(\s*)procedure\s*::\s*(.*)$")
-          attr_re = re.compile(r"^(\s*)procedure\s*,\s*([^:]+?)\s*::\s*(.*)$")
-
-          bindings = {}
-          parent = {}
-          for path in all_source:
-              with open(path) as fh:
-                  lines = fh.readlines()
-              cur_t = None
-              for line in lines:
-                  m = type_decl_re.match(line)
-                  if cur_t is None and m:
-                      cur_t = m.group(1)
-                      bindings.setdefault(cur_t, set())
-                      em = extends_re.search(line)
-                      if em:
-                          parent[cur_t] = em.group(1)
-                      continue
-                  if cur_t is not None and end_type_re.match(line):
-                      cur_t = None
-                      continue
-                  if cur_t is not None:
-                      m2 = simple_re.match(line)
-                      if m2:
-                          rhs = m2.group(2)
-                          name = (rhs.split("=>")[0] if "=>" in rhs else rhs).strip().split()[0].lower()
-                          if name: bindings[cur_t].add(name)
-                          continue
-                      m3 = attr_re.match(line)
-                      if m3:
-                          rhs = m3.group(3)
-                          name = (rhs.split("=>")[0] if "=>" in rhs else rhs).strip().split()[0].lower()
-                          if name: bindings[cur_t].add(name)
-                          continue
-
-          def descendants(t):
-              result = set()
-              for other, par in parent.items():
-                  if par == t:
-                      result.add(other)
-                      result |= descendants(other)
-              return result
-
-          overridden = {}
-          for t in bindings:
-              overridden[t] = set()
-              for sub in descendants(t):
-                  overridden[t] |= bindings[t] & bindings.get(sub, set())
-
-          print("=== Base types with overridden bindings ===")
-          for t in sorted(overridden):
-              if overridden[t]:
-                  print(f"  {t}: {sorted(overridden[t])}")
-          print()
-
-          total_added = 0
-          files_changed = 0
-          for path in all_source:
-              with open(path) as fh:
-                  lines = fh.readlines()
-              out = []
-              cur_t = None
-              fadd = 0
-              for line in lines:
-                  m = type_decl_re.match(line)
-                  if cur_t is None and m:
-                      cur_t = m.group(1); out.append(line); continue
-                  if cur_t is not None and end_type_re.match(line):
-                      cur_t = None; out.append(line); continue
-                  if cur_t is not None:
-                      if re.search(r",\s*deferred\b", line, re.IGNORECASE): out.append(line); continue
-                      if re.search(r"\bnopass\b", line, re.IGNORECASE): out.append(line); continue
-                      if re.search(r"\bnon_overridable\b", line, re.IGNORECASE): out.append(line); continue
-
-                      def name_of(rhs):
-                          return (rhs.split("=>")[0] if "=>" in rhs else rhs).strip().split()[0].lower()
-
-                      m2 = simple_re.match(line)
-                      if m2:
-                          if name_of(m2.group(2)) in overridden.get(cur_t, set()):
-                              out.append(line)
-                          else:
-                              out.append(m2.group(1) + "procedure, non_overridable :: " + m2.group(2) + "\n")
-                              fadd += 1
-                          continue
-                      m3 = attr_re.match(line)
-                      if m3:
-                          if name_of(m3.group(3)) in overridden.get(cur_t, set()):
-                              out.append(line)
-                          else:
-                              out.append(m3.group(1) + "procedure, " + m3.group(2).strip() + ", non_overridable :: " + m3.group(3) + "\n")
-                              fadd += 1
-                          continue
-                  out.append(line)
-              if fadd > 0:
-                  with open(path, "w") as fh:
-                      fh.writelines(out)
-                  files_changed += 1
-                  total_added += fadd
-          print(f"Files changed: {files_changed}")
-          print(f"non_overridable additions: {total_added}")
-          PYEOF
-
-      - name: Dump solv/model.f90 for diagnosis
-        if: always()
-        run: |
-          echo "=== solv/model.f90 lines 140-200 (context around line 159) ==="
-          sed -n '140,200p' src/solv/model.f90 2>/dev/null || echo "(missing)"
+          echo "================================================================"
+          echo "Full flag list from flang -help (grepping for 'type' and 'desc')"
+          echo "================================================================"
+          "${{ env.FLANG_BIN }}" --help 2>&1 | grep -iE "type|desc|poly|rtti" | head -n 40 || true
           echo ""
-          echo "=== solv/model.f90 lines 680-720 (context around line 698) ==="
-          sed -n '680,720p' src/solv/model.f90 2>/dev/null || echo "(missing)"
-          echo ""
-          echo "=== Types declared in src/solv/model.f90 ==="
-          grep -nE "^\s*type[ ,].*::" src/solv/model.f90 2>/dev/null || echo "(none)"
-          echo ""
-          echo "=== 'class(...), allocatable' in src/solv/ ==="
-          grep -rnE "class\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*,[[:space:]]*allocatable" src/solv/ 2>/dev/null || echo "(none)"
-          echo ""
-          echo "=== 'allocate(' with '::' anywhere in src/solv/ ==="
-          grep -rnE "allocate\s*\(\s*[A-Za-z_]+[[:space:]]*::" src/solv/ 2>/dev/null || echo "(none)"
-          echo ""
-          echo "=== 'select type' blocks in src/solv/ ==="
-          grep -rn "select *type" src/solv/ 2>/dev/null || echo "(none)"
-          echo ""
-          echo "=== 'use xtb_solv_' or 'TSolvation' references outside src/solv/ ==="
-          grep -rn "TSolvation\|xtb_solv" src/ 2>/dev/null | grep -v "^src/solv/" | head -n 30 || echo "(none)"
-          echo ""
-          echo "=== Is src/solv referenced in src/meson.build? ==="
-          grep -n "solv" src/meson.build 2>/dev/null || echo "(no solv references)"
-
-      - name: Reconfigure build
-        run: |
-          meson setup --reconfigure builddir || {
-            echo "=== Reconfigure failed ==="
-            cat builddir/meson-logs/meson-log.txt
-            exit 1
-          }
-
-      - name: Build project
-        run: meson compile -C builddir
-
-      - name: Find built libraries
-        if: always()
-        run: find builddir -name '*.so' || true
-
-      - name: Upload libxtb.so
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: libxtb-android-arm64
-          path: builddir/**/*.so
-          if-no-files-found: warn
+          echo "=== -mllvm help from underlying LLVM ==="
+          "${{ env.FLANG_BIN }}" -mllvm --help 2>&1 | grep -iE "type|desc|poly" | head -n 40 || true
