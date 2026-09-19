@@ -29,16 +29,20 @@ jobs:
       - name: Download Flang Toolchain
         run: |
           wget -O toolchain.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-install.tar.bz2
+          
+          echo "===== FILE TYPE ====="
+          file toolchain.tar.bz2
+          
+          echo "===== FIRST 20 ENTRIES IN TARBALL ====="
+          tar -tjf toolchain.tar.bz2 2>&1 | head -20
+          
+          echo "===== ATTEMPTING EXTRACTION ====="
           tar -xjf toolchain.tar.bz2
+          TAR_EXIT=$?
+          echo "tar exit code: $TAR_EXIT"
           
-          echo "===== TOP LEVEL DIRECTORY ====="
+          echo "===== TOP LEVEL AFTER EXTRACTION ====="
           ls -la
-          
-          echo "===== ALL FILES NAMED *flang* ====="
-          find . -iname '*flang*' -type f 2>/dev/null | head -50
-          
-          echo "===== ALL FILES IN ANY bin/ FOLDER ====="
-          find . -type d -name bin 2>/dev/null
           
           echo "===== DONE ====="
           exit 1
