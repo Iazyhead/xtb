@@ -127,14 +127,16 @@ jobs:
           tar xzf v3.12.0.tar.gz
           cd lapack-3.12.0
 
-          # Patch out LAPACKE subdirectory (triggers FortranCInterface check we can't pass)
-          echo "=== CMakeLists.txt before patch ==="
-          grep -n 'LAPACKE' CMakeLists.txt || true
-          sed -i '/add_subdirectory(LAPACKE)/d' CMakeLists.txt
-          sed -i 's/^if(LAPACKE)$/if(FALSE)/' CMakeLists.txt
-          echo ""
+          # Remove BOTH add_subdirectory(LAPACKE) and add_subdirectory(LAPACKE/include)
+          sed -i '/add_subdirectory(LAPACKE/d' CMakeLists.txt
+
           echo "=== CMakeLists.txt after patch ==="
-          grep -n 'LAPACKE' CMakeLists.txt || true
+          if grep -q 'add_subdirectory(LAPACKE' CMakeLists.txt; then
+            echo "WARNING: LAPACKE subdirs still present!"
+            grep -n 'add_subdirectory(LAPACKE' CMakeLists.txt
+          else
+            echo "OK: both LAPACKE subdirectory lines removed"
+          fi
 
           mkdir build && cd build
 
