@@ -27,13 +27,13 @@ jobs:
           echo "ANDROID_NDK_HOME=$PWD/android-ndk-r27c" >> $GITHUB_ENV
 
       - name: Download Flang Toolchain
-        # IMPORTANT: Check the Releases page of:
-        # https://github.com/termux/ndk-toolchain-clang-with-flang
-        # Find the latest Linux release and replace the URL below.
         run: |
-          wget -O toolchain.tar.gz https://github.com/termux/ndk-toolchain-clang-with-flang/archive/refs/tags/r29-1.tar.gz
-          tar -xzf toolchain.tar.gz
-          echo "FLANG_TOOLCHAIN=$PWD/toolchain" >> $GITHUB_ENV
+          # IMPORTANT: Replace the URL below with the one you copied for package-install.tar.bz2
+          wget -O toolchain.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-install.tar.bz2
+          tar -xjf toolchain.tar.bz2
+          FLANG_PATH=$(find $PWD -name 'aarch64-linux-android-flang' -type f | head -n 1)
+          FLANG_BIN_DIR=$(dirname "$FLANG_PATH")
+          echo "FLANG_TOOLCHAIN=$(dirname "$FLANG_BIN_DIR")" >> $GITHUB_ENV
 
       - name: Create Meson cross-file
         run: |
