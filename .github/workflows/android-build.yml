@@ -511,6 +511,163 @@ jobs:
         run: |
           find subprojects/mctc-lib -name 'meson.build' -exec sed -i '/ncoord/ s|^|# DISABLED-NCOORD: |' {} \;
 
+      - name: TEST abstract base + deferred binding + class() call
+        run: |
+          run_test() {
+            local name="$1"
+            local file="$2"
+            echo "================================================================"
+            echo "$name"
+            echo "================================================================"
+            "${{ env.FLANG_WRAPPER }}" -c "$file" -o "${file%.f90}.o" 2>&1 | head -n 15
+            if [ -f "${file%.f90}.o" ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+            echo ""
+          }
+
+          # T1: abstract base with non_overridable NON-deferred binding
+          cat > /tmp/t1.f90 << 'EOF'
+          module t1_mod
+            implicit none
+            type, abstract :: TBase
+              integer :: x = 0
+            contains
+              procedure, non_overridable :: get_x
+            end type
+            type, extends(TBase) :: TSub
+              integer :: y = 0
+            end type
+          contains
+            subroutine get_x(self, v)
+              class(TBase), intent(in) :: self
+              integer, intent(out) :: v
+              v = self%x
+            end subroutine
+            subroutine caller(obj)
+              class(TBase), intent(in) :: obj
+              integer :: v
+              call obj%get_x(v)
+            end subroutine
+          end module
+          EOF
+          run_test "T1: abstract + non_overridable + class() call" /tmp/t1.f90
+
+          # T2: abstract base with DEFERRED binding, subclass override, class() call
+          cat > /tmp/t2.f90 << 'EOF'
+          module t2_mod
+            implicit none
+            type, abstract :: TBase
+              integer :: x = 0
+            contains
+              procedure(compute_iface), deferred :: compute
+            end type
+            abstract interface
+              subroutine compute_iface(self)
+                import :: TBase
+                class(TBase), intent(in) :: self
+              end subroutine
+            end interface
+            type, extends(TBase) :: TSub
+              integer :: y = 0
+            contains
+              procedure :: compute => sub_compute
+            end type
+          contains
+            subroutine sub_compute(self)
+              class(TSub), intent(in) :: self
+            end subroutine
+            subroutine caller(obj)
+              class(TBase), intent(in) :: obj
+              call obj%compute()
+            end subroutine
+          end module
+          EOF
+          run_test "T2: abstract + DEFERRED + subclass override + class() call" /tmp/t2.f90
+
+          # T3: same as T2 but the call site uses type() instead of class()
+          cat > /tmp/t3.f90 << 'EOF'
+          module t3_mod
+            implicit none
+            type, abstract :: TBase
+              integer :: x = 0
+            contains
+              procedure(compute_iface), deferred :: compute
+            end type
+            abstract interface
+              subroutine compute_iface(self)
+                import :: TBase
+                class(TBase), intent(in) :: self
+              end subroutine
+            end interface
+            type, extends(TBase) :: TSub
+              integer :: y = 0
+            contains
+              procedure :: compute => sub_compute
+            end type
+          contains
+            subroutine sub_compute(self)
+              class(TSub), intent(in) :: self
+            end subroutine
+            subroutine caller(obj)
+              type(TSub), intent(in) :: obj
+              call obj%compute()
+            end subroutine
+          end module
+          EOF
+          run_test "T3: abstract + DEFERRED + type() call site" /tmp/t3.f90
+
+          # T4: abstract base with two levels of inheritance
+          cat > /tmp/t4.f90 << 'EOF'
+          module t4_mod
+            implicit none
+            type, abstract :: TBase
+              integer :: x = 0
+            contains
+              procedure(compute_iface), deferred :: compute
+            end type
+            abstract interface
+              subroutine compute_iface(self)
+                import :: TBase
+                class(TBase), intent(in) :: self
+              end subroutine
+            end interface
+            type, abstract, extends(TBase) :: TMid
+              integer :: y = 0
+            end type
+            type, extends(TMid) :: TLeaf
+              integer :: z = 0
+            contains
+              procedure :: compute => leaf_compute
+            end type
+          contains
+            subroutine leaf_compute(self)
+              class(TLeaf), intent(in) :: self
+            end subroutine
+            subroutine caller(obj)
+              class(TBase), intent(in) :: obj
+              call obj%compute()
+            end subroutine
+          end module
+          EOF
+          run_test "T4: 3-level abstract hierarchy + class() call" /tmp/t4.f90
+
+      - name: Dump model_hessian for inspection
+        if: always()
+        run: |
+          echo "================================================================"
+          echo "src/model_hessian/type.f90 (full file, numbered)"
+          echo "================================================================"
+          cat -n src/model_hessian/type.f90 2>/dev/null || echo "(not found)"
+          echo ""
+          echo "================================================================"
+          echo "All 'deferred' bindings in src/model_hessian/"
+          echo "================================================================"
+          grep -rn "deferred" src/model_hessian/ 2>/dev/null || echo "(none)"
+          echo ""
+          echo "================================================================"
+          echo "All class() usages in src/model_hessian/"
+          echo "================================================================"
+          grep -rn "class(" src/model_hessian/ 2>/dev/null || echo "(none)"
+
       - name: Add non_overridable to ALL type-bound procedures (incl. base types)
         run: |
           python3 - << 'PYEOF'
@@ -531,18 +688,6 @@ jobs:
 
           type_binding_report = {}
 
-          # FIXED: matches:
-          #   type Name
-          #   type :: Name
-          #   type, attrs :: Name
-          #   type, attrs Name
-          # but NOT:
-          #   type(Name)           (type reference)
-          #   type(Name) :: var    (variable decl of derived type)
-          #   type is / type is (...)  (select type)
-          #
-          # Strategy: reject anything with '(' right after 'type', then allow
-          # optional ', attr-spec' group, then optional '::', then an identifier.
           type_decl_re = re.compile(
               r"^\s*type\s*(?!\()\s*(?:,\s*[^:]+?)?\s*(?:::)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:!.*)?$",
               re.IGNORECASE,
@@ -558,7 +703,6 @@ jobs:
 
           files_changed = 0
           total_added = 0
-          matched_type_names = set()
 
           for path in all_source:
               with open(path, "r", errors="replace") as fh:
@@ -573,7 +717,6 @@ jobs:
                   m_decl = type_decl_re.match(line)
                   if not in_type and m_decl:
                       current_type = m_decl.group(1)
-                      matched_type_names.add(current_type)
                       in_type = True
                       out_lines.append(line)
                       continue
@@ -628,51 +771,9 @@ jobs:
                       fh.writelines(out_lines)
                   files_changed += 1
                   total_added += file_added
-                  print(f"  {path}: +{file_added}")
 
-          print()
           print(f"Files changed: {files_changed}")
           print(f"non_overridable additions: {total_added}")
-          print()
-          print("=== Bindings marked non_overridable, by type ===")
-          for t in sorted(type_binding_report):
-              print(f"  {t}: {type_binding_report[t]}")
-          print()
-          print("=== Total distinct types matched by the decl regex ===")
-          print(f"  {len(matched_type_names)}")
-          PYEOF
-
-      - name: Verify chrg_parameter is now patched
-        if: always()
-        run: |
-          echo "=== src/type/param.f90 around line 110-135 ==="
-          sed -n '110,135p' src/type/param.f90
-          echo ""
-          echo "=== Any remaining type-bound procedures WITHOUT non_overridable ==="
-          echo "(these are the ones Flang might still choke on)"
-          python3 - << 'PYEOF'
-          import re, os
-          ROOTS = ["src", "subprojects/mctc-lib/src"]
-          FORTRAN_EXTS = (".f90", ".F90", ".f", ".F", ".f95", ".F95")
-          found = 0
-          for root in ROOTS:
-              for dirpath, _, filenames in os.walk(root):
-                  for fn in filenames:
-                      if not fn.endswith(FORTRAN_EXTS):
-                          continue
-                      p = os.path.join(dirpath, fn)
-                      with open(p, "r", errors="replace") as fh:
-                          for i, line in enumerate(fh, 1):
-                              if re.match(r"^\s*procedure\b", line, re.IGNORECASE):
-                                  if "deferred" in line.lower():
-                                      continue
-                                  if "nopass" in line.lower():
-                                      continue
-                                  if "non_overridable" in line.lower():
-                                      continue
-                                  print(f"{p}:{i}: {line.rstrip()}")
-                                  found += 1
-          print(f"\nTotal unpatched: {found}")
           PYEOF
 
       - name: Reconfigure build to pick up patches
