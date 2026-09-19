@@ -73,6 +73,7 @@ jobs:
           C
           "${{ env.NDK_BIN }}/aarch64-linux-android21-clang" -c /tmp/fortran_shim.c -o /tmp/fortran_shim.o
 
+          # Note: intrinsic modules path is passed as two separate args
           cat > flang-wrapper.sh << EOF
           #!/bin/bash
           export LD_LIBRARY_PATH="${{ env.RUNTIME_LIBS }}:${{ env.FLANG_LIB_DIR }}:\$LD_LIBRARY_PATH"
@@ -97,9 +98,10 @@ jobs:
             fi
           done
 
-          INTRINSIC_PATH=""
           if [ -d "$GITHUB_WORKSPACE/intrinsic-modules" ]; then
-            INTRINSIC_PATH="-fintrinsic-modules-path=$GITHUB_WORKSPACE/intrinsic-modules"
+            INTRINSIC_ARGS=( "-fintrinsic-modules-path" "$GITHUB_WORKSPACE/intrinsic-modules" )
+          else
+            INTRINSIC_ARGS=()
           fi
 
           if [[ \$COMPILE_ONLY -eq 1 ]]; then
@@ -107,14 +109,14 @@ jobs:
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
-              \$INTRINSIC_PATH \\
+              "\${INTRINSIC_ARGS[@]}" \\
               "\${FILTERED[@]}"
           else
             exec "${{ env.FLANG_BIN }}" \\
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
-              \$INTRINSIC_PATH \\
+              "\${INTRINSIC_ARGS[@]}" \\
               -B"${{ env.NDK_BIN }}" \\
               -fuse-ld=lld \\
               -L"$ANDROID_LIB_DIR" \\
@@ -140,8 +142,6 @@ jobs:
           mkdir -p intrinsic-modules
           cd intrinsic-modules
 
-          # Download flang's intrinsic module source files
-          # Compile in dependency order (kinds and C binding first).
           for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
             echo "=== Downloading $m.f90 ==="
             wget -q -O "${m}.f90" "${BASE_URL}/${m}.f90" && echo "OK: $m.f90" || echo "FAIL: $m.f90"
