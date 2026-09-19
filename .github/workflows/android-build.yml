@@ -504,6 +504,36 @@ jobs:
             exit 1
           }
 
+      - name: Locate toml usage
+        if: always()
+        run: |
+          echo "=== src/ top-level contents ==="
+          ls -la src/ || true
+          echo ""
+          echo "=== Any file under src/ mentioning toml ==="
+          grep -rln -i "toml" src/ 2>/dev/null || echo "(none)"
+          echo ""
+          echo "=== Any file under meson/ mentioning toml ==="
+          grep -rln -i "toml" meson/ 2>/dev/null || echo "(none)"
+          echo ""
+          echo "=== toml lines in src/meson.build ==="
+          grep -n -i "toml" src/meson.build 2>/dev/null || echo "(no file or no matches)"
+          echo ""
+          echo "=== toml lines in meson/meson.build ==="
+          grep -n -i "toml" meson/meson.build 2>/dev/null || echo "(no file or no matches)"
+          echo ""
+          echo "=== all meson.build files mentioning toml (excluding subprojects) ==="
+          find . -name meson.build -not -path './subprojects/*' -exec grep -Hn -i "toml" {} \; 2>/dev/null || true
+          echo ""
+          echo "=== files in subprojects/ ==="
+          ls -la subprojects/ || true
+          echo ""
+          echo "=== any .wrap files ==="
+          find . -path ./subprojects -prune -o -name '*.wrap' -print 2>/dev/null || true
+          echo ""
+          echo "=== contents of any wrap files ==="
+          cat subprojects/*.wrap 2>/dev/null || true
+
       - name: Patch toml-f for Flang compatibility
         run: |
           F=subprojects/toml-f/src/tomlf/type/value.f90
@@ -525,7 +555,6 @@ jobs:
           sed -i '0,/^contains$/s//contains\n\nsubroutine visit_default(self, val)\n  class(toml_visitor), intent(inout) :: self\n  class(toml_value), intent(inout) :: val\nend subroutine visit_default/' "$F"
 
           # 4. Neutralize the polymorphic dispatch call (the actual fir.dispatch site)
-          #    Matches: optional leading whitespace + 'call' + anything + '%visit'
           sed -i -E 's|^([[:space:]]*)call([[:space:]]+[^!]*%visit[^!]*)$|\1! Flang workaround: dispatch disabled (was: \2)|' "$F"
 
           echo ""
