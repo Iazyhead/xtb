@@ -105,6 +105,7 @@ jobs:
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
               -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \\
+              -mllvm -ignore-missing-type-desc \\
               "\${FILTERED[@]}"
           else
             exec "${{ env.FLANG_BIN }}" \\
@@ -112,6 +113,7 @@ jobs:
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
               -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \\
+              -mllvm -ignore-missing-type-desc \\
               -B"${{ env.NDK_BIN }}" \\
               -fuse-ld=lld \\
               -L"$ANDROID_LIB_DIR" \\
@@ -505,18 +507,29 @@ jobs:
       - name: Patch mctc-lib to disable JSON (removes jonquil and toml-f)
         run: |
           F=subprojects/mctc-lib/config/meson.build
-          if [ ! -f "$F" ]; then
-            echo "ERROR: $F not found — mctc-lib was not fetched"
-            exit 1
-          fi
-
           sed -i "s|required: get_option('json'),|required: false,|" "$F"
           sed -i "/fallback: \['jonquil','jonquil_dep'\],/d" "$F"
-
           echo "=== Patched jonquil declaration ==="
           grep -B2 -A6 "jonquil" "$F" || echo "(no jonquil references — GOOD)"
 
-      - name: Reconfigure build to pick up mctc-lib patch
+      - name: Patch mctc-lib to remove ncoord (Flang ARM fir.dispatch)
+        run: |
+          echo "=== BEFORE: ncoord references in mctc-lib meson.build files ==="
+          find subprojects/mctc-lib -name 'meson.build' -exec grep -Hn "ncoord" {} \; || echo "(none)"
+          echo ""
+          echo "=== Files in mctc-lib that 'use mctc_ncoord' (must be empty for safety) ==="
+          if grep -rln "use mctc_ncoord" subprojects/mctc-lib/src/ 2>/dev/null; then
+            echo "WARNING: some files still use ncoord — they will fail to build!"
+          else
+            echo "OK: no mctc-lib source files import ncoord"
+          fi
+          echo ""
+          echo "=== Commenting out every ncoord reference in mctc-lib meson.build files ==="
+          find subprojects/mctc-lib -name 'meson.build' -exec sed -i '/ncoord/ s|^|# DISABLED-NCOORD: |' {} \;
+          echo "=== AFTER ==="
+          find subprojects/mctc-lib -name 'meson.build' -exec grep -Hn "ncoord" {} \; || echo "(none active)"
+
+      - name: Reconfigure build to pick up mctc-lib patches
         run: |
           meson setup --reconfigure builddir || {
             echo "=== Reconfigure failed — showing meson log ==="
@@ -524,22 +537,17 @@ jobs:
             exit 1
           }
 
-      - name: Dump ncoord/type.f90 for inspection
+      - name: Sanity check — ncoord removed from build
         if: always()
         run: |
-          F=subprojects/mctc-lib/src/mctc/ncoord/type.f90
-          if [ ! -f "$F" ]; then
-            echo "(ncoord/type.f90 not found)"
-            exit 0
-          fi
-          echo "=== ncoord/type.f90: lines 1-120 ==="
-          sed -n '1,120p' "$F"
+          echo "=== ncoord entries in build.ninja (should be zero) ==="
+          grep -c "ncoord" builddir/build.ninja || echo 0
           echo ""
-          echo "=== ncoord/type.f90: lines 121-220 ==="
-          sed -n '121,220p' "$F"
+          echo "=== toml-f entries in build.ninja (should be zero) ==="
+          grep -c "toml-f" builddir/build.ninja || echo 0
           echo ""
-          echo "=== All 'type', 'abstract', 'procedure', 'class(' references ==="
-          grep -nE "abstract|procedure|class\(|class *\*|deferred|select type" "$F" || true
+          echo "=== jonquil entries in build.ninja (should be zero) ==="
+          grep -c "jonquil" builddir/build.ninja || echo 0
 
       - name: Build project
         run: meson compile -C builddir
