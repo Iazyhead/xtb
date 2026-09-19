@@ -30,18 +30,33 @@ jobs:
         run: |
           wget -O toolchain.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-install.tar.bz2
           tar -xjf toolchain.tar.bz2
-          echo "FLANG_TOOLCHAIN=$PWD" >> $GITHUB_ENV
-          echo "--- Checking toolchain contents ---"
-          ls -la $PWD/bin/
+          
+          echo "--- Searching for flang binary ---"
+          FLANG_PATH=$(find $PWD -name 'aarch64-linux-android-flang' | head -n 1)
+          
+          if [ -z "$FLANG_PATH" ]; then
+            echo "ERROR: Could not find aarch64-linux-android-flang in the extracted files."
+            echo "Here is what was extracted:"
+            ls -la
+            exit 1
+          fi
+          
+          echo "Found flang at: $FLANG_PATH"
+          FLANG_BIN_DIR=$(dirname "$FLANG_PATH")
+          FLANG_TOOLCHAIN=$(dirname "$FLANG_BIN_DIR")
+          
+          echo "FLANG_TOOLCHAIN=$FLANG_TOOLCHAIN" >> $GITHUB_ENV
+          echo "Detected FLANG_TOOLCHAIN: $FLANG_TOOLCHAIN"
 
       - name: Create Meson cross-file
         run: |
+          echo "Using FLANG_TOOLCHAIN: ${{ env.FLANG_TOOLCHAIN }}"
           cat > android-arm64.ini << EOF
           [binaries]
           c = '${{ env.FLANG_TOOLCHAIN }}/bin/aarch64-linux-android-clang'
           fortran = '${{ env.FLANG_TOOLCHAIN }}/bin/aarch64-linux-android-flang'
-          ar = '${{ env.FLANG_TOOLCHAIN }}/bin/llvm-ar'
-          strip = '${{ env.FLANG_TOOLCHAIN }}/bin/llvm-strip'
+          ar = 'llvm-ar'
+          strip = 'llvm-strip'
 
           [host_machine]
           system = 'android'
