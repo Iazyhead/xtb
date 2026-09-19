@@ -507,32 +507,35 @@ jobs:
       - name: Locate toml usage
         if: always()
         run: |
-          echo "=== src/ top-level contents ==="
-          ls -la src/ || true
+          echo "=== Real 'use tomlf' lines in src/ ==="
+          grep -rn "use tomlf" src/ 2>/dev/null || echo "(none)"
           echo ""
-          echo "=== Any file under src/ mentioning toml ==="
-          grep -rln -i "toml" src/ 2>/dev/null || echo "(none)"
+          echo "=== 'mctc_config' references in src/ ==="
+          grep -rn "mctc_config" src/ 2>/dev/null || echo "(none)"
           echo ""
-          echo "=== Any file under meson/ mentioning toml ==="
-          grep -rln -i "toml" meson/ 2>/dev/null || echo "(none)"
+          echo "=== All mctc_* modules used by xTB ==="
+          grep -rh "use mctc_" src/ 2>/dev/null | sort -u || echo "(none)"
           echo ""
-          echo "=== toml lines in src/meson.build ==="
-          grep -n -i "toml" src/meson.build 2>/dev/null || echo "(no file or no matches)"
+          echo "=== mctc-lib top-level ==="
+          ls -la subprojects/mctc-lib/ 2>/dev/null
           echo ""
-          echo "=== toml lines in meson/meson.build ==="
-          grep -n -i "toml" meson/meson.build 2>/dev/null || echo "(no file or no matches)"
+          echo "=== mctc-lib/src ==="
+          ls -la subprojects/mctc-lib/src/ 2>/dev/null
           echo ""
-          echo "=== all meson.build files mentioning toml (excluding subprojects) ==="
-          find . -name meson.build -not -path './subprojects/*' -exec grep -Hn -i "toml" {} \; 2>/dev/null || true
+          echo "=== mctc-lib toml/config references in all meson.build ==="
+          find subprojects/mctc-lib -name meson.build -exec grep -Hn -i "toml\|config" {} \; 2>/dev/null || echo "(none)"
           echo ""
-          echo "=== files in subprojects/ ==="
-          ls -la subprojects/ || true
+          echo "=== Full contents of mctc-lib/meson.build ==="
+          cat subprojects/mctc-lib/meson.build 2>/dev/null || echo "(not present)"
           echo ""
-          echo "=== any .wrap files ==="
-          find . -path ./subprojects -prune -o -name '*.wrap' -print 2>/dev/null || true
+          echo "=== Full contents of meson/dist_symlinks.sh ==="
+          cat meson/dist_symlinks.sh
           echo ""
-          echo "=== contents of any wrap files ==="
-          cat subprojects/*.wrap 2>/dev/null || true
+          echo "=== Files in mctc-lib/src/config (if any) ==="
+          ls -la subprojects/mctc-lib/src/config/ 2>/dev/null || echo "(no config dir)"
+          echo ""
+          echo "=== mctc-lib toml-f wrap contents ==="
+          cat subprojects/mctc-lib/subprojects/toml-f.wrap 2>/dev/null || echo "(not present)"
 
       - name: Patch toml-f for Flang compatibility
         run: |
