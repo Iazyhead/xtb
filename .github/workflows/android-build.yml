@@ -31,7 +31,7 @@ jobs:
         # https://github.com/termux/ndk-toolchain-clang-with-flang
         # Find the latest Linux release and replace the URL below.
         run: |
-          wget https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/v1.0.0/toolchain.tar.gz
+          wget https://github.com/termux/ndk-toolchain-clang-with-flang/archive/refs/tags/r29-1.tar.gz
           tar -xzf toolchain.tar.gz
           echo "FLANG_TOOLCHAIN=$PWD/toolchain" >> $GITHUB_ENV
 
