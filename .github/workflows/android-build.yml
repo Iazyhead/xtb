@@ -43,6 +43,7 @@ jobs:
 
           FLANG_BIN=$(find $PWD/flang-host -type f -name 'flang-*' -executable | head -n 1)
           FLANG_LIB_DIR=$(dirname $(dirname "$FLANG_BIN"))/lib
+          FLANG_INC_DIR=$(dirname $(dirname "$FLANG_BIN"))/include/flang
           CLANG_DEV_LIB="$PWD/full-install/out/install/linux-x86/clang-dev/lib"
 
           mkdir -p runtime-libs
@@ -55,7 +56,11 @@ jobs:
 
           echo "FLANG_BIN=$FLANG_BIN" >> $GITHUB_ENV
           echo "FLANG_LIB_DIR=$FLANG_LIB_DIR" >> $GITHUB_ENV
+          echo "FLANG_INC_DIR=$FLANG_INC_DIR" >> $GITHUB_ENV
           echo "RUNTIME_LIBS=$PWD/runtime-libs" >> $GITHUB_ENV
+
+          echo "=== Bundled intrinsic modules ==="
+          ls -la "$FLANG_INC_DIR"/*.mod 2>/dev/null | head -n 20
 
       - name: Build shim and Flang wrapper
         run: |
@@ -73,7 +78,6 @@ jobs:
           C
           "${{ env.NDK_BIN }}/aarch64-linux-android21-clang" -c /tmp/fortran_shim.c -o /tmp/fortran_shim.o
 
-          # Note: intrinsic modules path is passed as two separate args
           cat > flang-wrapper.sh << EOF
           #!/bin/bash
           export LD_LIBRARY_PATH="${{ env.RUNTIME_LIBS }}:${{ env.FLANG_LIB_DIR }}:\$LD_LIBRARY_PATH"
@@ -98,25 +102,17 @@ jobs:
             fi
           done
 
-          if [ -d "$GITHUB_WORKSPACE/intrinsic-modules" ]; then
-            INTRINSIC_ARGS=( "-fintrinsic-modules-path" "$GITHUB_WORKSPACE/intrinsic-modules" )
-          else
-            INTRINSIC_ARGS=()
-          fi
-
           if [[ \$COMPILE_ONLY -eq 1 ]]; then
             exec "${{ env.FLANG_BIN }}" \\
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
-              "\${INTRINSIC_ARGS[@]}" \\
               "\${FILTERED[@]}"
           else
             exec "${{ env.FLANG_BIN }}" \\
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
-              "\${INTRINSIC_ARGS[@]}" \\
               -B"${{ env.NDK_BIN }}" \\
               -fuse-ld=lld \\
               -L"$ANDROID_LIB_DIR" \\
@@ -134,7 +130,7 @@ jobs:
           chmod +x flang-wrapper.sh
           echo "FLANG_WRAPPER=$PWD/flang-wrapper.sh" >> $GITHUB_ENV
 
-      - name: Rebuild intrinsic modules for aarch64
+      - name: Rebuild and install intrinsic modules for aarch64
         run: |
           LLVM_COMMIT="5e96669f06077099aa41290cdb4c5e6fa0f59349"
           BASE_URL="https://raw.githubusercontent.com/llvm/llvm-project/${LLVM_COMMIT}/flang/module"
@@ -142,17 +138,15 @@ jobs:
           mkdir -p intrinsic-modules
           cd intrinsic-modules
 
+          # Download the 5 intrinsic module sources at the exact LLVM commit flang was built from
           for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
             echo "=== Downloading $m.f90 ==="
             wget -q -O "${m}.f90" "${BASE_URL}/${m}.f90" && echo "OK: $m.f90" || echo "FAIL: $m.f90"
           done
 
+          # Compile them with our aarch64 flang (produces aarch64 .mod files, no real(10))
           echo ""
-          echo "=== Sources downloaded ==="
-          ls -la
-
-          echo ""
-          echo "=== Compiling intrinsic modules for aarch64 ==="
+          echo "=== Compiling for aarch64 ==="
           for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
             if [ -f "${m}.f90" ]; then
               echo "--- Compiling $m ---"
@@ -166,8 +160,30 @@ jobs:
           done
 
           echo ""
-          echo "=== Resulting .mod files ==="
+          echo "=== Resulting aarch64 .mod files ==="
           ls -la *.mod 2>&1 || echo "No .mod files were generated!"
+
+          echo ""
+          echo "=== Backing up bundled .mod files ==="
+          mkdir -p "${{ env.FLANG_INC_DIR }}/backup"
+          cp "${{ env.FLANG_INC_DIR }}"/*.mod "${{ env.FLANG_INC_DIR }}/backup/" 2>/dev/null || true
+          ls -la "${{ env.FLANG_INC_DIR }}/backup/" | head -n 10
+
+          echo ""
+          echo "=== Installing aarch64 .mod files over bundled x86_64 ones ==="
+          for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
+            if [ -f "${m}.mod" ]; then
+              cp -v "${m}.mod" "${{ env.FLANG_INC_DIR }}/${m}.mod"
+            fi
+          done
+
+          echo ""
+          echo "=== Verifying bundled .mod files are now aarch64 ==="
+          if grep -q 'real(10)' "${{ env.FLANG_INC_DIR }}/ieee_arithmetic.mod" 2>/dev/null; then
+            echo "FAIL: bundled ieee_arithmetic.mod still has real(10)"
+          else
+            echo "OK: bundled ieee_arithmetic.mod no longer has real(10)"
+          fi
 
       - name: Build LAPACK for aarch64 Android
         run: |
