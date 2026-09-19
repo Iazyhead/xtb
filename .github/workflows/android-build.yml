@@ -511,7 +511,7 @@ jobs:
         run: |
           find subprojects/mctc-lib -name 'meson.build' -exec sed -i '/ncoord/ s|^|# DISABLED-NCOORD: |' {} \;
 
-      - name: Add non_overridable to type-bound procedures
+      - name: Add non_overridable to ALL type-bound procedures (incl. base types)
         run: |
           python3 - << 'PYEOF'
           import re
@@ -529,34 +529,8 @@ jobs:
 
           print(f"Scanned {len(all_source)} Fortran files")
 
-          # Collect abstract types and extended types (the same protection set)
-          abstract_re = re.compile(
-              r"^\s*type\s*,.*\babstract\b.*::\s*([A-Za-z_][A-Za-z0-9_]*)",
-              re.IGNORECASE,
-          )
-          abstract_types = set()
-          for path in all_source:
-              with open(path, "r", errors="replace") as fh:
-                  for line in fh:
-                      m = abstract_re.match(line)
-                      if m:
-                          abstract_types.add(m.group(1))
-
-          extends_re = re.compile(
-              r"\bextends\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
-              re.IGNORECASE,
-          )
-          extended_types = set()
-          for path in all_source:
-              with open(path, "r", errors="replace") as fh:
-                  for line in fh:
-                      for m in extends_re.finditer(line):
-                          extended_types.add(m.group(1))
-
-          # Types we do NOT touch (they are polymorphic base classes)
-          protected = abstract_types | extended_types
-          print("Protected types (bindings left alone):", sorted(protected))
-          print()
+          # Report of what we add non_overridable to, per type
+          type_binding_report = {}
 
           type_decl_re = re.compile(
               r"^\s*type\s*(?:,[^:]*)?::\s*([A-Za-z_][A-Za-z0-9_]*)",
@@ -580,47 +554,45 @@ jobs:
 
               out_lines = []
               in_type = False
-              current_type_protected = True
+              current_type = None
 
               file_added = 0
 
               for line in lines:
                   m_decl = type_decl_re.match(line)
                   if not in_type and m_decl:
-                      type_name = m_decl.group(1)
-                      current_type_protected = type_name in protected
+                      current_type = m_decl.group(1)
                       in_type = True
                       out_lines.append(line)
                       continue
 
                   if in_type and end_type_re.match(line):
                       in_type = False
+                      current_type = None
                       out_lines.append(line)
                       continue
 
-                  if in_type and not current_type_protected:
-                      # Skip deferred
+                  if in_type:
+                      # Skip deferred bindings (must remain polymorphic)
                       if deferred_re.search(line):
                           out_lines.append(line)
                           continue
 
-                      # Simple form: procedure :: name
                       m = simple_binding_re.match(line)
                       if m:
                           new_line = m.group(1) + "procedure, non_overridable :: " + m.group(2) + "\n"
                           out_lines.append(new_line)
                           file_added += 1
+                          type_binding_report.setdefault(current_type, 0)
+                          type_binding_report[current_type] += 1
                           continue
 
-                      # Attributed form: procedure, attrs :: name
                       m = attr_binding_re.match(line)
                       if m:
                           attrs = m.group(2)
-                          # Skip if nopass (already devirtualized by hand or auto)
                           if nopass_re.search(attrs):
                               out_lines.append(line)
                               continue
-                          # Skip if already non_overridable
                           if has_nonoverr_re.search(attrs):
                               out_lines.append(line)
                               continue
@@ -634,6 +606,8 @@ jobs:
                           )
                           out_lines.append(new_line)
                           file_added += 1
+                          type_binding_report.setdefault(current_type, 0)
+                          type_binding_report[current_type] += 1
                           continue
 
                   out_lines.append(line)
@@ -643,12 +617,37 @@ jobs:
                       fh.writelines(out_lines)
                   files_changed += 1
                   total_added += file_added
-                  print(f"  {path}: +{file_added} non_overridable")
+                  print(f"  {path}: +{file_added}")
 
           print()
           print(f"Files changed: {files_changed}")
           print(f"non_overridable additions: {total_added}")
+          print()
+          print("=== Bindings marked non_overridable, by type ===")
+          for t in sorted(type_binding_report):
+              print(f"  {t}: {type_binding_report[t]}")
           PYEOF
+
+      - name: Dump param.f90 and TMultipoleData for diagnosis
+        if: always()
+        run: |
+          echo "================================================================"
+          echo "src/type/param.f90 — first 200 lines"
+          echo "================================================================"
+          sed -n '1,200p' src/type/param.f90 2>/dev/null || echo "(not found)"
+          echo ""
+          echo "================================================================"
+          echo "Where is TMultipoleData defined?"
+          echo "================================================================"
+          grep -rn "TMultipoleData" src/ 2>/dev/null | head -n 20 || true
+          echo ""
+          echo "================================================================"
+          echo "Does any subclass override a TMultipoleData binding?"
+          echo "================================================================"
+          grep -rn "procedure.*::" src/type/param.f90 2>/dev/null || true
+          echo ""
+          echo "=== Any 'extends(TMultipoleData)' ==="
+          grep -rn "extends(TMultipoleData)" src/ 2>/dev/null || true
 
       - name: Reconfigure build to pick up patches
         run: |
