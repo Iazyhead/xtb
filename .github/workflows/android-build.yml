@@ -511,62 +511,96 @@ jobs:
         run: |
           find subprojects/mctc-lib -name 'meson.build' -exec sed -i '/ncoord/ s|^|# DISABLED-NCOORD: |' {} \;
 
-      - name: Survey abstract types and extends clauses
+      - name: Devirtualize leaf types (Python)
+        run: |
+          python3 - << 'PYEOF'
+          import re
+          import os
+
+          ROOTS = ["src", "subprojects/mctc-lib/src"]
+          FORTRAN_EXTS = (".f90", ".F90", ".f", ".F", ".f95", ".F95")
+
+          all_source = []
+          for root in ROOTS:
+              for dirpath, _, filenames in os.walk(root):
+                  for fn in filenames:
+                      if fn.endswith(FORTRAN_EXTS):
+                          all_source.append(os.path.join(dirpath, fn))
+
+          print(f"Scanned {len(all_source)} Fortran files")
+
+          # 1. Collect abstract type names.
+          abstract_re = re.compile(
+              r"^\s*type\s*,.*\babstract\b.*::\s*([A-Za-z_][A-Za-z0-9_]*)",
+              re.IGNORECASE,
+          )
+          abstract_types = set()
+          for path in all_source:
+              with open(path, "r", errors="replace") as fh:
+                  for line in fh:
+                      m = abstract_re.match(line)
+                      if m:
+                          abstract_types.add(m.group(1))
+
+          # 2. Collect names that appear as "extends(NAME)".
+          extends_re = re.compile(
+              r"\bextends\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
+              re.IGNORECASE,
+          )
+          extended_types = set()
+          for path in all_source:
+              with open(path, "r", errors="replace") as fh:
+                  for line in fh:
+                      for m in extends_re.finditer(line):
+                          extended_types.add(m.group(1))
+
+          protected = abstract_types | extended_types
+
+          print("Abstract types (protected):", sorted(abstract_types))
+          print("Extended base types (protected):", sorted(extended_types))
+          print(f"Total protected names: {len(protected)}")
+          print()
+
+          # 3. Replace class(X) -> type(X) unless X is protected or X == *
+          class_re = re.compile(
+              r"\bclass\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
+              re.IGNORECASE,
+          )
+
+          files_changed = 0
+          total_replacements = 0
+
+          for path in all_source:
+              with open(path, "r", errors="replace") as fh:
+                  content = fh.read()
+
+              def repl(m):
+                  name = m.group(1)
+                  if name in protected:
+                      return m.group(0)
+                  return f"type({name})"
+
+              new_content, n = class_re.subn(repl, content)
+              if n > 0:
+                  with open(path, "w") as fh:
+                      fh.write(new_content)
+                  files_changed += 1
+                  total_replacements += n
+                  print(f"  {path}: {n} replacements")
+
+          print()
+          print(f"Total files changed: {files_changed}")
+          print(f"Total class() -> type() replacements: {total_replacements}")
+          PYEOF
+
+      - name: Show diff of devirtualized files
         if: always()
         run: |
-          echo "================================================================"
-          echo "Abstract type declarations in xTB + mctc-lib"
-          echo "================================================================"
-          grep -rhnE "^[[:space:]]*type[[:space:],].*abstract[[:space:]]*::" src/ subprojects/mctc-lib/src/ 2>/dev/null
+          echo "=== git diff summary ==="
+          git diff --stat || true
           echo ""
-          echo "================================================================"
-          echo "All 'extends(' clauses (indicates subclasses exist)"
-          echo "================================================================"
-          grep -rhnE "extends[[:space:]]*\(" src/ subprojects/mctc-lib/src/ 2>/dev/null | head -n 50
-          echo ""
-          echo "=== count of extends ==="
-          grep -rE "extends[[:space:]]*\(" src/ subprojects/mctc-lib/src/ 2>/dev/null | wc -l
-
-      - name: Devirtualize — replace class(CONCRETE) with type(CONCRETE)
-        run: |
-          # Collect abstract type names
-          ABSTRACT_LIST=$(grep -rhE "^[[:space:]]*type[[:space:],].*abstract[[:space:]]*::" src/ subprojects/mctc-lib/src/ 2>/dev/null \
-            | sed -E 's/.*::[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*).*/\1/' \
-            | sort -u)
-
-          echo "=== Abstract types (kept as class()): ==="
-          echo "$ABSTRACT_LIST"
-          echo ""
-
-          count_files=0
-          count_subs=0
-
-          for f in $(find src subprojects/mctc-lib/src -type f \( -name '*.f90' -o -name '*.F90' -o -name '*.f' -o -name '*.F' -o -name '*.f95' -o -name '*.F95' \) 2>/dev/null); do
-            before=$(grep -cE "class[[:space:]]*\(" "$f" 2>/dev/null || echo 0)
-
-            # Protect class(*) with a placeholder
-            sed -i -E 's/class[[:space:]]*\([[:space:]]*\*[[:space:]]*\)/CLASS_UNLIMITED_PROTECTED/g' "$f"
-
-            # Replace class( with type( everywhere
-            sed -i -E 's/\bclass[[:space:]]*\(/type(/g' "$f"
-
-            # Restore abstract types as class()
-            for t in $ABSTRACT_LIST; do
-              sed -i -E "s/\btype[[:space:]]*\([[:space:]]*${t}[[:space:]]*\)/class(${t})/g" "$f"
-            done
-
-            # Restore class(*)
-            sed -i 's/CLASS_UNLIMITED_PROTECTED/class(*)/g' "$f"
-
-            after=$(grep -cE "class[[:space:]]*\(" "$f" 2>/dev/null || echo 0)
-            if [ "$before" != "$after" ]; then
-              count_files=$((count_files+1))
-              count_subs=$((count_subs + (before - after)))
-            fi
-          done
-
-          echo "=== Files modified: $count_files ==="
-          echo "=== class() replaced with type(): $count_subs ==="
+          echo "=== Sample diff for basisset.f90 and atomlist.f90 ==="
+          git diff src/type/basisset.f90 src/type/atomlist.f90 || true
 
       - name: Reconfigure build to pick up patches
         run: |
