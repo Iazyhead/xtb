@@ -28,44 +28,37 @@ jobs:
 
       - name: Download Flang Toolchain
         run: |
-          # Download the correct Flang package
-          wget -O flang-host.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-flang-host.tar.bz2
-          tar -xjf flang-host.tar.bz2
+          # Download the full toolchain package
+          wget -O toolchain.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-install.tar.bz2
+          tar -xjf toolchain.tar.bz2
           
-          echo "--- Searching for compiler binaries ---"
-          # Find the flang binary dynamically
-          FLANG_PATH=$(find $PWD -type f -name '*flang*' | head -n 1)
+          echo "--- Searching for clang and flang binaries ---"
+          # Find the actual compiler binaries dynamically
+          CLANG_BIN=$(find $PWD -type f -name 'clang' | head -n 1)
+          FLANG_BIN=$(find $PWD -type f -name 'flang*' | head -n 1)
           
-          if [ -z "$FLANG_PATH" ]; then
-            echo "ERROR: Could not find any flang binary. Listing all executables:"
-            find $PWD -type f -executable | grep -E 'clang|flang' | head -n 20
+          echo "Found clang at: $CLANG_BIN"
+          echo "Found flang at: $FLANG_BIN"
+          
+          if [ -z "$FLANG_BIN" ]; then
+            echo "ERROR: Could not find flang. Listing all files with 'flang' in the name:"
+            find $PWD -iname '*flang*'
             exit 1
           fi
           
-          echo "Found compiler at: $FLANG_PATH"
-          FLANG_BIN_DIR=$(dirname "$FLANG_PATH")
-          FLANG_TOOLCHAIN=$(dirname "$FLANG_BIN_DIR")
-          echo "FLANG_TOOLCHAIN=$FLANG_TOOLCHAIN" >> $GITHUB_ENV
-          
-          # Debug: List the contents of the bin directory
-          echo "--- Contents of $FLANG_BIN_DIR ---"
-          ls -la "$FLANG_BIN_DIR"
+          # Save the paths to use in the next step
+          echo "CLANG_BIN=$CLANG_BIN" >> $GITHUB_ENV
+          echo "FLANG_BIN=$FLANG_BIN" >> $GITHUB_ENV
 
       - name: Create Meson cross-file
         run: |
-          FLANG_BIN_DIR="${{ env.FLANG_TOOLCHAIN }}/bin"
+          echo "Using C compiler: ${{ env.CLANG_BIN }}"
+          echo "Using Fortran compiler: ${{ env.FLANG_BIN }}"
           
-          # Determine the exact compiler names (they might not have the aarch64 prefix)
-          CLANG_BIN=$(find "$FLANG_BIN_DIR" -type f -name '*clang*' | head -n 1)
-          FLANG_BIN=$(find "$FLANG_BIN_DIR" -type f -name '*flang*' | head -n 1)
-          
-          echo "Using C compiler: $CLANG_BIN"
-          echo "Using Fortran compiler: $FLANG_BIN"
-
           cat > android-arm64.ini << EOF
           [binaries]
-          c = '${CLANG_BIN}'
-          fortran = '${FLANG_BIN}'
+          c = '${{ env.CLANG_BIN }}'
+          fortran = '${{ env.FLANG_BIN }}'
           ar = 'llvm-ar'
           strip = 'llvm-strip'
 
