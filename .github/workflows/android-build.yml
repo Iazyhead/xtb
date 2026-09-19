@@ -105,7 +105,7 @@ jobs:
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
               -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \\
-              -mllvm -skip-external-rtti-definition \\
+              -mllvm -ignore-missing-type-desc \\
               "\${FILTERED[@]}"
           else
             exec "${{ env.FLANG_BIN }}" \\
@@ -113,7 +113,7 @@ jobs:
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
               -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \\
-              -mllvm -skip-external-rtti-definition \\
+              -mllvm -ignore-missing-type-desc \\
               -B"${{ env.NDK_BIN }}" \\
               -fuse-ld=lld \\
               -L"$ANDROID_LIB_DIR" \\
