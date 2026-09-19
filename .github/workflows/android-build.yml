@@ -32,13 +32,34 @@ jobs:
           tar -xjf flang-host.tar.bz2
           echo "FLANG_BIN=$PWD/build-host-install/bin/flang-21" >> $GITHUB_ENV
 
-      - name: Create Flang wrapper
+      - name: Create Flang wrapper (with diagnostics)
         run: |
           NDK_TOOLCHAIN="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$NDK_TOOLCHAIN/sysroot"
+          FLANG_DIR=$(dirname "${{ env.FLANG_BIN }}")
+          FLANG_ROOT=$(dirname "$FLANG_DIR")
           
+          echo "========== LDD ON FLANG BINARY =========="
+          ldd "${{ env.FLANG_BIN }}" 2>&1 | head -n 50
+          
+          echo ""
+          echo "========== SHARED LIBRARIES IN FLANG ROOT =========="
+          find "$FLANG_ROOT" -name '*.so*' 2>/dev/null | head -n 50
+          
+          echo ""
+          echo "========== FLANG --version (with LD_LIBRARY_PATH) =========="
+          LD_LIBRARY_PATH="$FLANG_ROOT/lib:$FLANG_ROOT/lib64:$LD_LIBRARY_PATH" \
+            "${{ env.FLANG_BIN }}" --version 2>&1 | head -n 20
+          
+          echo ""
+          echo "========== FLANG --version (plain) =========="
+          "${{ env.FLANG_BIN }}" --version 2>&1 | head -n 20
+          
+          echo ""
+          echo "========== CREATING WRAPPER =========="
           cat > flang-wrapper.sh << EOF
           #!/bin/bash
+          export LD_LIBRARY_PATH="$FLANG_ROOT/lib:$FLANG_ROOT/lib64:\$LD_LIBRARY_PATH"
           exec "${{ env.FLANG_BIN }}" \\
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
@@ -48,6 +69,14 @@ jobs:
           EOF
           chmod +x flang-wrapper.sh
           echo "FLANG_WRAPPER=$PWD/flang-wrapper.sh" >> $GITHUB_ENV
+          cat flang-wrapper.sh
+          
+          echo ""
+          echo "========== TESTING WRAPPER =========="
+          ./flang-wrapper.sh --version 2>&1 | head -n 20
+          
+          echo "========== DONE =========="
+          exit 0
 
       - name: Create Meson cross-file
         run: |
@@ -88,7 +117,7 @@ jobs:
         run: meson compile -C builddir
 
       - name: Find built libraries
-        run: find builddir -name '*.so'
+        run: find builddir -name '*.so' || true
 
       - name: Upload libxtb.so
         uses: actions/upload-artifact@v4
