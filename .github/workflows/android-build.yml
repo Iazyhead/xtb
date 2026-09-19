@@ -43,7 +43,6 @@ jobs:
 
           FLANG_BIN=$(find $PWD/flang-host -type f -name 'flang-*' -executable | head -n 1)
           FLANG_LIB_DIR=$(dirname $(dirname "$FLANG_BIN"))/lib
-          FLANG_INC_DIR=$(dirname $(dirname "$FLANG_BIN"))/include/flang
           CLANG_DEV_LIB="$PWD/full-install/out/install/linux-x86/clang-dev/lib"
 
           mkdir -p runtime-libs
@@ -54,19 +53,8 @@ jobs:
           AARCH64_RUNTIME_LIB="$PWD/flang-aarch64/build-aarch64-install"
           cp -v "$AARCH64_RUNTIME_LIB"/libFortran*.a "$FLANG_LIB_DIR/"
 
-          # Patch flang's x86_64-built .mod files so they don't reference REAL(10)
-          # which doesn't exist on aarch64.
-          echo "=== Patching flang intrinsic .mod files ==="
-          echo "Flang include dir: $FLANG_INC_DIR"
-          ls -la "$FLANG_INC_DIR" | head -n 30
-          find "$FLANG_INC_DIR" -name '*.mod' -exec sed -i 's/real(10)/real(8)/gi' {} \;
-          echo ""
-          echo "=== Verifying patch applied ==="
-          grep -l 'real(10)' "$FLANG_INC_DIR"/*.mod 2>/dev/null && echo "WARNING: some .mod files still have real(10)" || echo "OK: no .mod file contains real(10)"
-
           echo "FLANG_BIN=$FLANG_BIN" >> $GITHUB_ENV
           echo "FLANG_LIB_DIR=$FLANG_LIB_DIR" >> $GITHUB_ENV
-          echo "FLANG_INC_DIR=$FLANG_INC_DIR" >> $GITHUB_ENV
           echo "RUNTIME_LIBS=$PWD/runtime-libs" >> $GITHUB_ENV
 
       - name: Build shim and Flang wrapper
@@ -109,19 +97,24 @@ jobs:
             fi
           done
 
+          INTRINSIC_PATH=""
+          if [ -d "$GITHUB_WORKSPACE/intrinsic-modules" ]; then
+            INTRINSIC_PATH="-fintrinsic-modules-path=$GITHUB_WORKSPACE/intrinsic-modules"
+          fi
+
           if [[ \$COMPILE_ONLY -eq 1 ]]; then
             exec "${{ env.FLANG_BIN }}" \\
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
-              -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \\
+              \$INTRINSIC_PATH \\
               "\${FILTERED[@]}"
           else
             exec "${{ env.FLANG_BIN }}" \\
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
-              -fintrinsic-modules-path "${{ env.FLANG_INC_DIR }}" \\
+              \$INTRINSIC_PATH \\
               -B"${{ env.NDK_BIN }}" \\
               -fuse-ld=lld \\
               -L"$ANDROID_LIB_DIR" \\
@@ -138,6 +131,43 @@ jobs:
           EOF
           chmod +x flang-wrapper.sh
           echo "FLANG_WRAPPER=$PWD/flang-wrapper.sh" >> $GITHUB_ENV
+
+      - name: Rebuild intrinsic modules for aarch64
+        run: |
+          LLVM_COMMIT="5e96669f06077099aa41290cdb4c5e6fa0f59349"
+          BASE_URL="https://raw.githubusercontent.com/llvm/llvm-project/${LLVM_COMMIT}/flang/module"
+
+          mkdir -p intrinsic-modules
+          cd intrinsic-modules
+
+          # Download flang's intrinsic module source files
+          # Compile in dependency order (kinds and C binding first).
+          for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
+            echo "=== Downloading $m.f90 ==="
+            wget -q -O "${m}.f90" "${BASE_URL}/${m}.f90" && echo "OK: $m.f90" || echo "FAIL: $m.f90"
+          done
+
+          echo ""
+          echo "=== Sources downloaded ==="
+          ls -la
+
+          echo ""
+          echo "=== Compiling intrinsic modules for aarch64 ==="
+          for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
+            if [ -f "${m}.f90" ]; then
+              echo "--- Compiling $m ---"
+              "${{ env.FLANG_WRAPPER }}" -c "${m}.f90" -o "${m}.o" 2>&1 | head -n 20
+              if [ -f "${m}.mod" ]; then
+                echo "OK: ${m}.mod generated"
+              else
+                echo "FAIL: ${m}.mod NOT generated"
+              fi
+            fi
+          done
+
+          echo ""
+          echo "=== Resulting .mod files ==="
+          ls -la *.mod 2>&1 || echo "No .mod files were generated!"
 
       - name: Build LAPACK for aarch64 Android
         run: |
