@@ -28,24 +28,44 @@ jobs:
 
       - name: Download Flang Toolchain
         run: |
+          # Download the correct Flang package
           wget -O flang-host.tar.bz2 https://github.com/termux/ndk-toolchain-clang-with-flang/releases/download/r29-1/package-flang-host.tar.bz2
           tar -xjf flang-host.tar.bz2
-          echo "--- Searching for flang binary ---"
-          FLANG_PATH=$(find $PWD -name 'aarch64-linux-android-flang' | head -n 1)
-          echo "Found flang at: $FLANG_PATH"
+          
+          echo "--- Searching for compiler binaries ---"
+          # Find the flang binary dynamically
+          FLANG_PATH=$(find $PWD -type f -name '*flang*' | head -n 1)
+          
           if [ -z "$FLANG_PATH" ]; then
-            echo "ERROR: Could not find aarch64-linux-android-flang."
+            echo "ERROR: Could not find any flang binary. Listing all executables:"
+            find $PWD -type f -executable | grep -E 'clang|flang' | head -n 20
             exit 1
           fi
+          
+          echo "Found compiler at: $FLANG_PATH"
           FLANG_BIN_DIR=$(dirname "$FLANG_PATH")
-          echo "FLANG_TOOLCHAIN=$(dirname "$FLANG_BIN_DIR")" >> $GITHUB_ENV
+          FLANG_TOOLCHAIN=$(dirname "$FLANG_BIN_DIR")
+          echo "FLANG_TOOLCHAIN=$FLANG_TOOLCHAIN" >> $GITHUB_ENV
+          
+          # Debug: List the contents of the bin directory
+          echo "--- Contents of $FLANG_BIN_DIR ---"
+          ls -la "$FLANG_BIN_DIR"
 
       - name: Create Meson cross-file
         run: |
+          FLANG_BIN_DIR="${{ env.FLANG_TOOLCHAIN }}/bin"
+          
+          # Determine the exact compiler names (they might not have the aarch64 prefix)
+          CLANG_BIN=$(find "$FLANG_BIN_DIR" -type f -name '*clang*' | head -n 1)
+          FLANG_BIN=$(find "$FLANG_BIN_DIR" -type f -name '*flang*' | head -n 1)
+          
+          echo "Using C compiler: $CLANG_BIN"
+          echo "Using Fortran compiler: $FLANG_BIN"
+
           cat > android-arm64.ini << EOF
           [binaries]
-          c = '${FLANG_TOOLCHAIN}/bin/aarch64-linux-android-clang'
-          fortran = '${FLANG_TOOLCHAIN}/bin/aarch64-linux-android-flang'
+          c = '${CLANG_BIN}'
+          fortran = '${FLANG_BIN}'
           ar = 'llvm-ar'
           strip = 'llvm-strip'
 
@@ -63,7 +83,7 @@ jobs:
           EOF
 
       - name: Configure build
-        run: meson setup builddir --cross-file android-arm64.ini -Dtblite=disabled -Dcpcmx=disabled
+        run: meson setup builddir --cross-file android-arm64.ini
 
       - name: Build project
         run: meson compile -C builddir
