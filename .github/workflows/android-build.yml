@@ -431,275 +431,119 @@ jobs:
             fi
           done
 
-      - name: Build LAPACK for aarch64 Android
+      - name: TEST Flang binding syntax variants
         run: |
-          wget -q https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v3.12.0.tar.gz
-          tar xzf v3.12.0.tar.gz
-          cd lapack-3.12.0
-
-          sed -i '/add_subdirectory(LAPACKE/d' CMakeLists.txt
-
-          mkdir build && cd build
-
-          cmake .. \
-            -DCMAKE_SYSTEM_NAME=Android \
-            -DCMAKE_SYSTEM_VERSION=21 \
-            -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
-            -DCMAKE_ANDROID_NDK="${{ env.ANDROID_NDK_HOME }}" \
-            -DCMAKE_Fortran_COMPILER="${{ env.FLANG_WRAPPER }}" \
-            -DCMAKE_C_COMPILER="${{ env.NDK_BIN }}/aarch64-linux-android21-clang" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=ON \
-            -DBUILD_TESTING=OFF \
-            -DLAPACKE=OFF \
-            -DBUILD_LAPACKE=OFF \
-            -DCBLAS=OFF \
-            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-            -DCMAKE_Fortran_COMPILER_WORKS=1 \
-            -DCMAKE_C_COMPILER_WORKS=1 \
-            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/lapack-install"
-
-          make -j$(nproc)
-          make install
-
-      - name: Create Meson cross-file
-        run: |
-          cat > android-arm64.ini << EOF
-          [binaries]
-          c = '${{ env.NDK_BIN }}/aarch64-linux-android21-clang'
-          cpp = '${{ env.NDK_BIN }}/aarch64-linux-android21-clang++'
-          fortran = '${{ env.FLANG_WRAPPER }}'
-          ar = '${{ env.NDK_BIN }}/llvm-ar'
-          strip = '${{ env.NDK_BIN }}/llvm-strip'
-
-          [host_machine]
-          system = 'android'
-          cpu_family = 'aarch64'
-          cpu = 'aarch64'
-          endian = 'little'
-
-          [properties]
-          needs_exe_wrapper = true
-
-          [built-in options]
-          default_library = 'shared'
+          echo "================================================================"
+          echo "TEST 1: direct binding + non_overridable + type() dummy"
+          echo "================================================================"
+          cat > /tmp/t1.f90 << 'EOF'
+          module t1_mod
+            implicit none
+            type :: TMy
+              integer :: x = 0
+            contains
+              procedure, non_overridable :: init
+            end type
+          contains
+            subroutine init(self, v)
+              type(TMy), intent(inout) :: self
+              integer, intent(in) :: v
+              self%x = v
+            end subroutine
+          end module
           EOF
-
-      - name: Configure build
-        run: |
-          LAPACK_DIR="$GITHUB_WORKSPACE/lapack-install"
-          meson setup builddir \
-              --cross-file android-arm64.ini \
-              -Dlapack=custom \
-              -Dcustom_libraries="-L${LAPACK_DIR}/lib,lapack,blas" \
-              -Dopenmp=false \
-              -Dtblite=disabled \
-              -Dcpcmx=disabled || {
-            echo "=== MESON LOG ==="
-            cat builddir/meson-logs/meson-log.txt
-            exit 1
-          }
-
-      - name: Patch mctc-lib to disable JSON (removes jonquil and toml-f)
-        run: |
-          F=subprojects/mctc-lib/config/meson.build
-          sed -i "s|required: get_option('json'),|required: false,|" "$F"
-          sed -i "/fallback: \['jonquil','jonquil_dep'\],/d" "$F"
-          grep -B2 -A6 "jonquil" "$F" || echo "(no jonquil references — GOOD)"
-
-      - name: Patch mctc-lib to remove ncoord (Flang ARM fir.dispatch)
-        run: |
-          find subprojects/mctc-lib -name 'meson.build' -exec sed -i '/ncoord/ s|^|# DISABLED-NCOORD: |' {} \;
-
-      - name: Devirtualize + mark non_overridable (Python)
-        run: |
-          python3 - << 'PYEOF'
-          import re
-          import os
-
-          ROOTS = ["src", "subprojects/mctc-lib/src"]
-          FORTRAN_EXTS = (".f90", ".F90", ".f", ".F", ".f95", ".F95")
-
-          all_source = []
-          for root in ROOTS:
-              for dirpath, _, filenames in os.walk(root):
-                  for fn in filenames:
-                      if fn.endswith(FORTRAN_EXTS):
-                          all_source.append(os.path.join(dirpath, fn))
-
-          print(f"Scanned {len(all_source)} Fortran files")
-
-          # Step 1: collect protected type names
-          abstract_re = re.compile(
-              r"^\s*type\s*,.*\babstract\b.*::\s*([A-Za-z_][A-Za-z0-9_]*)",
-              re.IGNORECASE,
-          )
-          abstract_types = set()
-          for path in all_source:
-              with open(path, "r", errors="replace") as fh:
-                  for line in fh:
-                      m = abstract_re.match(line)
-                      if m:
-                          abstract_types.add(m.group(1))
-
-          extends_re = re.compile(
-              r"\bextends\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
-              re.IGNORECASE,
-          )
-          extended_types = set()
-          for path in all_source:
-              with open(path, "r", errors="replace") as fh:
-                  for line in fh:
-                      for m in extends_re.finditer(line):
-                          extended_types.add(m.group(1))
-
-          protected = abstract_types | extended_types
-          print("Protected types:", sorted(protected))
-          print()
-
-          # Step 2: transform each file
-          class_re = re.compile(
-              r"\bclass\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
-              re.IGNORECASE,
-          )
-          type_decl_re = re.compile(
-              r"^\s*type\s*(?:,[^:]*)?::\s*([A-Za-z_][A-Za-z0-9_]*)",
-              re.IGNORECASE,
-          )
-          end_type_re = re.compile(r"^\s*end\s*type\b", re.IGNORECASE)
-
-          # procedure binding matchers
-          simple_binding_re = re.compile(
-              r"^(\s*)procedure\s*::\s*(.*)$"
-          )
-          attr_binding_re = re.compile(
-              r"^(\s*)procedure\s*,\s*([^:]+?)\s*::\s*(.*)$"
-          )
-          deferred_re = re.compile(r",\s*deferred\b", re.IGNORECASE)
-          already_nonoverr_re = re.compile(r"\bnon_overridable\b", re.IGNORECASE)
-
-          files_changed = 0
-          total_class_swaps = 0
-          total_nonoverr = 0
-
-          for path in all_source:
-              with open(path, "r", errors="replace") as fh:
-                  content = fh.read()
-              lines = content.splitlines(keepends=True)
-              out_lines = []
-
-              in_type = False
-              current_type_protected = True  # default safe
-
-              file_class_swaps = 0
-              file_nonoverr = 0
-
-              for line in lines:
-                  # Check for type definition start
-                  m_decl = type_decl_re.match(line)
-                  if not in_type and m_decl:
-                      # Avoid matching "type(foo) :: var" — require bare "type" before ::
-                      # type_decl_re won't match "type(foo) :: var" because of the [^:]* requirement
-                      type_name = m_decl.group(1)
-                      current_type_protected = (type_name in protected) or (type_name in abstract_types)
-                      in_type = True
-                      out_lines.append(line)
-                      continue
-
-                  if in_type and end_type_re.match(line):
-                      in_type = False
-                      out_lines.append(line)
-                      continue
-
-                  # Modify procedure bindings inside non-protected type definitions
-                  if in_type and not current_type_protected:
-                      if deferred_re.search(line):
-                          out_lines.append(line)
-                          continue
-
-                      m_simple = simple_binding_re.match(line)
-                      if m_simple:
-                          # "procedure :: name" → "procedure, non_overridable :: name"
-                          new_line = m_simple.group(1) + "procedure, non_overridable :: " + m_simple.group(2) + "\n"
-                          out_lines.append(new_line)
-                          file_nonoverr += 1
-                          continue
-
-                      m_attr = attr_binding_re.match(line)
-                      if m_attr:
-                          attrs = m_attr.group(2).strip()
-                          if already_nonoverr_re.search(attrs):
-                              out_lines.append(line)
-                              continue
-                          new_line = (
-                              m_attr.group(1)
-                              + "procedure, "
-                              + attrs
-                              + ", non_overridable :: "
-                              + m_attr.group(3)
-                              + "\n"
-                          )
-                          out_lines.append(new_line)
-                          file_nonoverr += 1
-                          continue
-
-                  out_lines.append(line)
-
-              # Now do class() -> type() replacements on the joined content
-              joined = "".join(out_lines)
-
-              def repl(m):
-                  name = m.group(1)
-                  if name in protected or name in abstract_types:
-                      return m.group(0)
-                  return f"type({name})"
-
-              new_joined, n = class_re.subn(repl, joined)
-              file_class_swaps = n
-
-              if file_class_swaps > 0 or file_nonoverr > 0:
-                  with open(path, "w") as fh:
-                      fh.write(new_joined)
-                  files_changed += 1
-                  total_class_swaps += file_class_swaps
-                  total_nonoverr += file_nonoverr
-                  if file_nonoverr > 0:
-                      print(f"  {path}: class->type={file_class_swaps}  non_overridable={file_nonoverr}")
-
-          print()
-          print(f"Files changed: {files_changed}")
-          print(f"class() -> type() swaps: {total_class_swaps}")
-          print(f"non_overridable additions: {total_nonoverr}")
-          PYEOF
-
-      - name: Sample diff
-        if: always()
-        run: |
-          echo "=== src/ptb/data.f90 diff (around binding) ==="
-          git diff src/ptb/data.f90 | head -n 60 || true
+          "${{ env.FLANG_WRAPPER }}" -c /tmp/t1.f90 -o /tmp/t1.o 2>&1 | head -n 20
+          if [ -f /tmp/t1.o ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
           echo ""
-          echo "=== src/type/atomlist.f90 diff (binding area) ==="
-          git diff src/type/atomlist.f90 | head -n 40 || true
 
-      - name: Reconfigure build to pick up patches
-        run: |
-          meson setup --reconfigure builddir || {
-            echo "=== Reconfigure failed — showing meson log ==="
-            cat builddir/meson-logs/meson-log.txt
-            exit 1
-          }
+          echo "================================================================"
+          echo "TEST 2: renamed binding + non_overridable + type() dummy"
+          echo "================================================================"
+          cat > /tmp/t2.f90 << 'EOF'
+          module t2_mod
+            implicit none
+            type :: TMy
+              integer :: x = 0
+            contains
+              procedure, non_overridable :: init => TMy_init
+            end type
+          contains
+            subroutine TMy_init(self, v)
+              type(TMy), intent(inout) :: self
+              integer, intent(in) :: v
+              self%x = v
+            end subroutine
+          end module
+          EOF
+          "${{ env.FLANG_WRAPPER }}" -c /tmp/t2.f90 -o /tmp/t2.o 2>&1 | head -n 20
+          if [ -f /tmp/t2.o ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+          echo ""
 
-      - name: Build project
-        run: meson compile -C builddir
+          echo "================================================================"
+          echo "TEST 3: pass(self) explicit + non_overridable + type() dummy"
+          echo "================================================================"
+          cat > /tmp/t3.f90 << 'EOF'
+          module t3_mod
+            implicit none
+            type :: TMy
+              integer :: x = 0
+            contains
+              procedure, pass(self), non_overridable :: init
+            end type
+          contains
+            subroutine init(self, v)
+              type(TMy), intent(inout) :: self
+              integer, intent(in) :: v
+              self%x = v
+            end subroutine
+          end module
+          EOF
+          "${{ env.FLANG_WRAPPER }}" -c /tmp/t3.f90 -o /tmp/t3.o 2>&1 | head -n 20
+          if [ -f /tmp/t3.o ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+          echo ""
 
-      - name: Find built libraries
-        if: always()
-        run: find builddir -name '*.so' || true
+          echo "================================================================"
+          echo "TEST 4: no non_overridable, direct binding, type() dummy"
+          echo "================================================================"
+          cat > /tmp/t4.f90 << 'EOF'
+          module t4_mod
+            implicit none
+            type :: TMy
+              integer :: x = 0
+            contains
+              procedure :: init
+            end type
+          contains
+            subroutine init(self, v)
+              type(TMy), intent(inout) :: self
+              integer, intent(in) :: v
+              self%x = v
+            end subroutine
+          end module
+          EOF
+          "${{ env.FLANG_WRAPPER }}" -c /tmp/t4.f90 -o /tmp/t4.o 2>&1 | head -n 20
+          if [ -f /tmp/t4.o ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+          echo ""
 
-      - name: Upload libxtb.so
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: libxtb-android-arm64
-          path: builddir/**/*.so
-          if-no-files-found: warn
+          echo "================================================================"
+          echo "TEST 5: nopass + non_overridable + explicit self arg"
+          echo "================================================================"
+          cat > /tmp/t5.f90 << 'EOF'
+          module t5_mod
+            implicit none
+            type :: TMy
+              integer :: x = 0
+            contains
+              procedure, nopass, non_overridable :: init
+            end type
+          contains
+            subroutine init(self, v)
+              type(TMy), intent(inout) :: self
+              integer, intent(in) :: v
+              self%x = v
+            end subroutine
+          end module
+          EOF
+          "${{ env.FLANG_WRAPPER }}" -c /tmp/t5.f90 -o /tmp/t5.o 2>&1 | head -n 20
+          if [ -f /tmp/t5.o ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+          echo ""
