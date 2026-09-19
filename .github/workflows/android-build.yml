@@ -507,65 +507,22 @@ jobs:
 
       - name: Patch toml-f for Flang compatibility
         run: |
-          VALUE_F90="subprojects/toml-f/src/tomlf/type/value.f90"
-
-          if [ ! -f "$VALUE_F90" ]; then
-            echo "ERROR: $VALUE_F90 not found. Subproject layout may have changed."
-            ls -la subprojects/ 2>/dev/null || true
+          F=subprojects/toml-f/src/tomlf/type/value.f90
+          if [ ! -f "$F" ]; then
+            echo "ERROR: $F not found"
             exit 1
           fi
 
-          echo "=== Before patch: toml_visitor definition ==="
-          grep -n "toml_visitor\|procedure.*visit" "$VALUE_F90" | head -n 10
+          echo "=== Before patch ==="
+          grep -n "toml_visitor\|procedure.*visit" "$F" | head
 
-          python3 - << 'PYEOF'
-          import re
-
-          path = "subprojects/toml-f/src/tomlf/type/value.f90"
-          with open(path, 'r') as f:
-              content = f.read()
-
-          # 1. Make toml_visitor non-abstract
-          content = re.sub(
-              r'type\s*,\s*abstract\s*::\s*toml_visitor',
-              'type :: toml_visitor',
-              content
-          )
-
-          # 2. Replace deferred visit with a concrete default
-          content = re.sub(
-              r'procedure\s*\(\s*visit\s*\)\s*,\s*deferred\s*::\s*visit',
-              'procedure :: visit => visit_default',
-              content
-          )
-
-          # 3. Insert visit_default after the module-level "contains"
-          end_interface = re.search(r'end\s+interface', content)
-          if end_interface:
-              start = end_interface.end()
-              module_contains = re.search(r'\bcontains\b', content[start:])
-              if module_contains:
-                  insert_pos = start + module_contains.end()
-                  default_impl = """
-   !> Default no-op visitor implementation (Flang fir.dispatch workaround)
-   recursive subroutine visit_default(self, val)
-      class(toml_visitor), intent(inout) :: self
-      class(toml_value), intent(inout) :: val
-   end subroutine visit_default
-"""
-                  content = content[:insert_pos] + default_impl + content[insert_pos:]
-
-          with open(path, 'w') as f:
-              f.write(content)
-
-          print("Patch applied successfully.")
-          PYEOF
+          sed -i 's/type, abstract :: toml_visitor/type :: toml_visitor/' "$F"
+          sed -i 's/procedure(visit), deferred :: visit/procedure :: visit => visit_default/' "$F"
+          sed -i '0,/^contains$/s//contains\n\nsubroutine visit_default(self, val)\n  class(toml_visitor), intent(inout) :: self\n  class(toml_value), intent(inout) :: val\nend subroutine visit_default/' "$F"
 
           echo ""
-          echo "=== After patch: verification ==="
-          grep -n "type :: toml_visitor" "$VALUE_F90" && echo "  OK: toml_visitor non-abstract" || { echo "  FAIL"; exit 1; }
-          grep -n "procedure :: visit => visit_default" "$VALUE_F90" && echo "  OK: visit concrete" || { echo "  FAIL"; exit 1; }
-          grep -n "visit_default" "$VALUE_F90" | head -n 3 && echo "  OK: visit_default present" || { echo "  FAIL"; exit 1; }
+          echo "=== After patch ==="
+          grep -n "toml_visitor\|procedure.*visit\|visit_default" "$F" | head
 
       - name: Build project
         run: meson compile -C builddir
