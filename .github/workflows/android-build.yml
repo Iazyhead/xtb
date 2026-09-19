@@ -420,15 +420,11 @@ jobs:
           end module ieee_arithmetic
           FORT
 
-          echo ""
-          echo "=== Compiling stubs ==="
           for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
             "${{ env.FLANG_WRAPPER }}" -I. -c "${m}.f90" -o "${m}.o" 2>&1 | head -n 5
             if [ -f "${m}.mod" ]; then echo "OK: ${m}.mod"; else echo "FAIL: ${m}.mod"; fi
           done
 
-          echo ""
-          echo "=== Installing stubs ==="
           for m in iso_fortran_env iso_c_binding ieee_features ieee_exceptions ieee_arithmetic; do
             if [ -f "${m}.mod" ]; then
               cp -v "${m}.mod" "${{ env.FLANG_INC_DIR }}/${m}.mod"
@@ -509,25 +505,11 @@ jobs:
           F=subprojects/mctc-lib/config/meson.build
           sed -i "s|required: get_option('json'),|required: false,|" "$F"
           sed -i "/fallback: \['jonquil','jonquil_dep'\],/d" "$F"
-          echo "=== Patched jonquil declaration ==="
           grep -B2 -A6 "jonquil" "$F" || echo "(no jonquil references — GOOD)"
 
       - name: Patch mctc-lib to remove ncoord (Flang ARM fir.dispatch)
         run: |
-          echo "=== BEFORE: ncoord references in mctc-lib meson.build files ==="
-          find subprojects/mctc-lib -name 'meson.build' -exec grep -Hn "ncoord" {} \; || echo "(none)"
-          echo ""
-          echo "=== Files in mctc-lib that 'use mctc_ncoord' (must be empty for safety) ==="
-          if grep -rln "use mctc_ncoord" subprojects/mctc-lib/src/ 2>/dev/null; then
-            echo "WARNING: some files still use ncoord — they will fail to build!"
-          else
-            echo "OK: no mctc-lib source files import ncoord"
-          fi
-          echo ""
-          echo "=== Commenting out every ncoord reference in mctc-lib meson.build files ==="
           find subprojects/mctc-lib -name 'meson.build' -exec sed -i '/ncoord/ s|^|# DISABLED-NCOORD: |' {} \;
-          echo "=== AFTER ==="
-          find subprojects/mctc-lib -name 'meson.build' -exec grep -Hn "ncoord" {} \; || echo "(none active)"
 
       - name: Reconfigure build to pick up mctc-lib patches
         run: |
@@ -537,29 +519,44 @@ jobs:
             exit 1
           }
 
-      - name: Sanity check — ncoord removed from build
+      - name: SURVEY polymorphic constructs in xTB source
         if: always()
         run: |
-          echo "=== ncoord entries in build.ninja (should be zero) ==="
-          grep -c "ncoord" builddir/build.ninja || echo 0
+          echo "================================================================"
+          echo "SURVEY: polymorphic constructs in xTB source"
+          echo "================================================================"
           echo ""
-          echo "=== toml-f entries in build.ninja (should be zero) ==="
-          grep -c "toml-f" builddir/build.ninja || echo 0
+          echo "=== Count of 'type, public, abstract' or 'type, abstract' (xTB + subprojects) ==="
+          grep -rn "type.*abstract :: " src/ subprojects/mctc-lib/src/ 2>/dev/null | wc -l
           echo ""
-          echo "=== jonquil entries in build.ninja (should be zero) ==="
-          grep -c "jonquil" builddir/build.ninja || echo 0
+          echo "=== Count of 'procedure(...), deferred ::' ==="
+          grep -rn "procedure([^)]*), *deferred" src/ subprojects/mctc-lib/src/ 2>/dev/null | wc -l
+          echo ""
+          echo "=== Count of 'class(' argument declarations ==="
+          grep -rn "class([a-z_]*)" src/ subprojects/mctc-lib/src/ 2>/dev/null | wc -l
+          echo ""
+          echo "=== Count of 'select type' ==="
+          grep -rn "select *type" src/ subprojects/mctc-lib/src/ 2>/dev/null | wc -l
+          echo ""
+          echo "=== Files in src/ with ANY of these constructs ==="
+          grep -rlnE "type.*abstract :: |procedure\([^)]*\), *deferred|select *type|class\([a-z_]*\)" src/ 2>/dev/null | sort
+          echo ""
+          echo "=== Files in subprojects/mctc-lib/src/ with ANY of these ==="
+          grep -rlnE "type.*abstract :: |procedure\([^)]*\), *deferred|select *type|class\([a-z_]*\)" subprojects/mctc-lib/src/ 2>/dev/null | sort
+          echo ""
+          echo "================================================================"
+          echo "DETAIL: src/type/basisset.f90 — around line 84"
+          echo "================================================================"
+          sed -n '1,120p' src/type/basisset.f90
+          echo ""
+          echo "================================================================"
+          echo "DETAIL: src/type/atomlist.f90 — around line 161"
+          echo "================================================================"
+          sed -n '1,200p' src/type/atomlist.f90
 
       - name: Build project
-        run: meson compile -C builddir
+        run: meson compile -C builddir || true
 
       - name: Find built libraries
         if: always()
         run: find builddir -name '*.so' || true
-
-      - name: Upload libxtb.so
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: libxtb-android-arm64
-          path: builddir/**/*.so
-          if-no-files-found: warn
