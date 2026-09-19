@@ -511,7 +511,64 @@ jobs:
         run: |
           find subprojects/mctc-lib -name 'meson.build' -exec sed -i '/ncoord/ s|^|# DISABLED-NCOORD: |' {} \;
 
-      - name: Reconfigure build to pick up mctc-lib patches
+      - name: Survey abstract types and extends clauses
+        if: always()
+        run: |
+          echo "================================================================"
+          echo "Abstract type declarations in xTB + mctc-lib"
+          echo "================================================================"
+          grep -rhnE "^[[:space:]]*type[[:space:],].*abstract[[:space:]]*::" src/ subprojects/mctc-lib/src/ 2>/dev/null
+          echo ""
+          echo "================================================================"
+          echo "All 'extends(' clauses (indicates subclasses exist)"
+          echo "================================================================"
+          grep -rhnE "extends[[:space:]]*\(" src/ subprojects/mctc-lib/src/ 2>/dev/null | head -n 50
+          echo ""
+          echo "=== count of extends ==="
+          grep -rE "extends[[:space:]]*\(" src/ subprojects/mctc-lib/src/ 2>/dev/null | wc -l
+
+      - name: Devirtualize — replace class(CONCRETE) with type(CONCRETE)
+        run: |
+          # Collect abstract type names
+          ABSTRACT_LIST=$(grep -rhE "^[[:space:]]*type[[:space:],].*abstract[[:space:]]*::" src/ subprojects/mctc-lib/src/ 2>/dev/null \
+            | sed -E 's/.*::[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*).*/\1/' \
+            | sort -u)
+
+          echo "=== Abstract types (kept as class()): ==="
+          echo "$ABSTRACT_LIST"
+          echo ""
+
+          count_files=0
+          count_subs=0
+
+          for f in $(find src subprojects/mctc-lib/src -type f \( -name '*.f90' -o -name '*.F90' -o -name '*.f' -o -name '*.F' -o -name '*.f95' -o -name '*.F95' \) 2>/dev/null); do
+            before=$(grep -cE "class[[:space:]]*\(" "$f" 2>/dev/null || echo 0)
+
+            # Protect class(*) with a placeholder
+            sed -i -E 's/class[[:space:]]*\([[:space:]]*\*[[:space:]]*\)/CLASS_UNLIMITED_PROTECTED/g' "$f"
+
+            # Replace class( with type( everywhere
+            sed -i -E 's/\bclass[[:space:]]*\(/type(/g' "$f"
+
+            # Restore abstract types as class()
+            for t in $ABSTRACT_LIST; do
+              sed -i -E "s/\btype[[:space:]]*\([[:space:]]*${t}[[:space:]]*\)/class(${t})/g" "$f"
+            done
+
+            # Restore class(*)
+            sed -i 's/CLASS_UNLIMITED_PROTECTED/class(*)/g' "$f"
+
+            after=$(grep -cE "class[[:space:]]*\(" "$f" 2>/dev/null || echo 0)
+            if [ "$before" != "$after" ]; then
+              count_files=$((count_files+1))
+              count_subs=$((count_subs + (before - after)))
+            fi
+          done
+
+          echo "=== Files modified: $count_files ==="
+          echo "=== class() replaced with type(): $count_subs ==="
+
+      - name: Reconfigure build to pick up patches
         run: |
           meson setup --reconfigure builddir || {
             echo "=== Reconfigure failed — showing meson log ==="
@@ -519,44 +576,17 @@ jobs:
             exit 1
           }
 
-      - name: SURVEY polymorphic constructs in xTB source
-        if: always()
-        run: |
-          echo "================================================================"
-          echo "SURVEY: polymorphic constructs in xTB source"
-          echo "================================================================"
-          echo ""
-          echo "=== Count of 'type, public, abstract' or 'type, abstract' (xTB + subprojects) ==="
-          grep -rn "type.*abstract :: " src/ subprojects/mctc-lib/src/ 2>/dev/null | wc -l
-          echo ""
-          echo "=== Count of 'procedure(...), deferred ::' ==="
-          grep -rn "procedure([^)]*), *deferred" src/ subprojects/mctc-lib/src/ 2>/dev/null | wc -l
-          echo ""
-          echo "=== Count of 'class(' argument declarations ==="
-          grep -rn "class([a-z_]*)" src/ subprojects/mctc-lib/src/ 2>/dev/null | wc -l
-          echo ""
-          echo "=== Count of 'select type' ==="
-          grep -rn "select *type" src/ subprojects/mctc-lib/src/ 2>/dev/null | wc -l
-          echo ""
-          echo "=== Files in src/ with ANY of these constructs ==="
-          grep -rlnE "type.*abstract :: |procedure\([^)]*\), *deferred|select *type|class\([a-z_]*\)" src/ 2>/dev/null | sort
-          echo ""
-          echo "=== Files in subprojects/mctc-lib/src/ with ANY of these ==="
-          grep -rlnE "type.*abstract :: |procedure\([^)]*\), *deferred|select *type|class\([a-z_]*\)" subprojects/mctc-lib/src/ 2>/dev/null | sort
-          echo ""
-          echo "================================================================"
-          echo "DETAIL: src/type/basisset.f90 — around line 84"
-          echo "================================================================"
-          sed -n '1,120p' src/type/basisset.f90
-          echo ""
-          echo "================================================================"
-          echo "DETAIL: src/type/atomlist.f90 — around line 161"
-          echo "================================================================"
-          sed -n '1,200p' src/type/atomlist.f90
-
       - name: Build project
-        run: meson compile -C builddir || true
+        run: meson compile -C builddir
 
       - name: Find built libraries
         if: always()
         run: find builddir -name '*.so' || true
+
+      - name: Upload libxtb.so
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: libxtb-android-arm64
+          path: builddir/**/*.so
+          if-no-files-found: warn
