@@ -431,18 +431,46 @@ jobs:
             fi
           done
 
-      - name: TEST Flang binding syntax variants
+      - name: TEST Flang binding + codegen variants
         run: |
-          echo "================================================================"
-          echo "TEST 1: direct binding + non_overridable + type() dummy"
-          echo "================================================================"
-          cat > /tmp/t1.f90 << 'EOF'
-          module t1_mod
+          run_test() {
+            local name="$1"
+            local file="$2"
+            echo "================================================================"
+            echo "$name"
+            echo "================================================================"
+            "${{ env.FLANG_WRAPPER }}" -c "$file" -o "${file%.f90}.o" 2>&1 | head -n 15
+            if [ -f "${file%.f90}.o" ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+            echo ""
+          }
+
+          # TEST A: non_extensible + class() receiver + binding (compile only)
+          cat > /tmp/tA.f90 << 'EOF'
+          module tA_mod
             implicit none
-            type :: TMy
+            type, non_extensible :: TMy
               integer :: x = 0
             contains
-              procedure, non_overridable :: init
+              procedure :: init
+            end type
+          contains
+            subroutine init(self, v)
+              class(TMy), intent(inout) :: self
+              integer, intent(in) :: v
+              self%x = v
+            end subroutine
+          end module
+          EOF
+          run_test "TEST A: non_extensible + class() receiver" /tmp/tA.f90
+
+          # TEST B: non_extensible + type() receiver + binding + codegen (call site)
+          cat > /tmp/tB.f90 << 'EOF'
+          module tB_mod
+            implicit none
+            type, non_extensible :: TMy
+              integer :: x = 0
+            contains
+              procedure :: init
             end type
           contains
             subroutine init(self, v)
@@ -450,65 +478,42 @@ jobs:
               integer, intent(in) :: v
               self%x = v
             end subroutine
-          end module
-          EOF
-          "${{ env.FLANG_WRAPPER }}" -c /tmp/t1.f90 -o /tmp/t1.o 2>&1 | head -n 20
-          if [ -f /tmp/t1.o ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
-          echo ""
-
-          echo "================================================================"
-          echo "TEST 2: renamed binding + non_overridable + type() dummy"
-          echo "================================================================"
-          cat > /tmp/t2.f90 << 'EOF'
-          module t2_mod
-            implicit none
-            type :: TMy
-              integer :: x = 0
-            contains
-              procedure, non_overridable :: init => TMy_init
-            end type
-          contains
-            subroutine TMy_init(self, v)
-              type(TMy), intent(inout) :: self
-              integer, intent(in) :: v
-              self%x = v
+            subroutine caller(obj)
+              type(TMy), intent(inout) :: obj
+              call obj%init(5)
             end subroutine
           end module
           EOF
-          "${{ env.FLANG_WRAPPER }}" -c /tmp/t2.f90 -o /tmp/t2.o 2>&1 | head -n 20
-          if [ -f /tmp/t2.o ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
-          echo ""
+          run_test "TEST B: non_extensible + type() receiver + call site" /tmp/tB.f90
 
-          echo "================================================================"
-          echo "TEST 3: pass(self) explicit + non_overridable + type() dummy"
-          echo "================================================================"
-          cat > /tmp/t3.f90 << 'EOF'
-          module t3_mod
+          # TEST C: non_extensible + class() receiver + binding + codegen (call site)
+          cat > /tmp/tC.f90 << 'EOF'
+          module tC_mod
             implicit none
-            type :: TMy
+            type, non_extensible :: TMy
               integer :: x = 0
             contains
-              procedure, pass(self), non_overridable :: init
+              procedure :: init
             end type
           contains
             subroutine init(self, v)
-              type(TMy), intent(inout) :: self
+              class(TMy), intent(inout) :: self
               integer, intent(in) :: v
               self%x = v
             end subroutine
+            subroutine caller(obj)
+              class(TMy), intent(inout) :: obj
+              call obj%init(5)
+            end subroutine
           end module
           EOF
-          "${{ env.FLANG_WRAPPER }}" -c /tmp/t3.f90 -o /tmp/t3.o 2>&1 | head -n 20
-          if [ -f /tmp/t3.o ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
-          echo ""
+          run_test "TEST C: non_extensible + class() receiver + call site" /tmp/tC.f90
 
-          echo "================================================================"
-          echo "TEST 4: no non_overridable, direct binding, type() dummy"
-          echo "================================================================"
-          cat > /tmp/t4.f90 << 'EOF'
-          module t4_mod
+          # TEST D: bare 'type, non_extensible' vs 'type, public, non_extensible'
+          cat > /tmp/tD.f90 << 'EOF'
+          module tD_mod
             implicit none
-            type :: TMy
+            type, public, non_extensible :: TMy
               integer :: x = 0
             contains
               procedure :: init
@@ -521,15 +526,11 @@ jobs:
             end subroutine
           end module
           EOF
-          "${{ env.FLANG_WRAPPER }}" -c /tmp/t4.f90 -o /tmp/t4.o 2>&1 | head -n 20
-          if [ -f /tmp/t4.o ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
-          echo ""
+          run_test "TEST D: type, public, non_extensible" /tmp/tD.f90
 
-          echo "================================================================"
-          echo "TEST 5: nopass + non_overridable + explicit self arg"
-          echo "================================================================"
-          cat > /tmp/t5.f90 << 'EOF'
-          module t5_mod
+          # TEST E: nopass fallback with call site — verify syntax
+          cat > /tmp/tE.f90 << 'EOF'
+          module tE_mod
             implicit none
             type :: TMy
               integer :: x = 0
@@ -542,8 +543,16 @@ jobs:
               integer, intent(in) :: v
               self%x = v
             end subroutine
+            subroutine caller(obj)
+              type(TMy), intent(inout) :: obj
+              call obj%init(obj, 5)
+            end subroutine
           end module
           EOF
-          "${{ env.FLANG_WRAPPER }}" -c /tmp/t5.f90 -o /tmp/t5.o 2>&1 | head -n 20
-          if [ -f /tmp/t5.o ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
-          echo ""
+          run_test "TEST E: nopass + explicit self + call site" /tmp/tE.f90
+
+          echo "================================================================"
+          echo "SUMMARY"
+          echo "================================================================"
+          echo "If TEST B passes: we can add 'non_extensible' everywhere and keep original syntax."
+          echo "If TEST E passes and B fails: we must convert to nopass and rewrite call sites."
