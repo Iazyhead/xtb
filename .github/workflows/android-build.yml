@@ -529,11 +529,22 @@ jobs:
 
           print(f"Scanned {len(all_source)} Fortran files")
 
-          # Report of what we add non_overridable to, per type
           type_binding_report = {}
 
+          # FIXED: matches:
+          #   type Name
+          #   type :: Name
+          #   type, attrs :: Name
+          #   type, attrs Name
+          # but NOT:
+          #   type(Name)           (type reference)
+          #   type(Name) :: var    (variable decl of derived type)
+          #   type is / type is (...)  (select type)
+          #
+          # Strategy: reject anything with '(' right after 'type', then allow
+          # optional ', attr-spec' group, then optional '::', then an identifier.
           type_decl_re = re.compile(
-              r"^\s*type\s*(?:,[^:]*)?::\s*([A-Za-z_][A-Za-z0-9_]*)",
+              r"^\s*type\s*(?!\()\s*(?:,\s*[^:]+?)?\s*(?:::)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:!.*)?$",
               re.IGNORECASE,
           )
           end_type_re = re.compile(r"^\s*end\s*type\b", re.IGNORECASE)
@@ -547,6 +558,7 @@ jobs:
 
           files_changed = 0
           total_added = 0
+          matched_type_names = set()
 
           for path in all_source:
               with open(path, "r", errors="replace") as fh:
@@ -555,13 +567,13 @@ jobs:
               out_lines = []
               in_type = False
               current_type = None
-
               file_added = 0
 
               for line in lines:
                   m_decl = type_decl_re.match(line)
                   if not in_type and m_decl:
                       current_type = m_decl.group(1)
+                      matched_type_names.add(current_type)
                       in_type = True
                       out_lines.append(line)
                       continue
@@ -573,7 +585,6 @@ jobs:
                       continue
 
                   if in_type:
-                      # Skip deferred bindings (must remain polymorphic)
                       if deferred_re.search(line):
                           out_lines.append(line)
                           continue
@@ -626,28 +637,43 @@ jobs:
           print("=== Bindings marked non_overridable, by type ===")
           for t in sorted(type_binding_report):
               print(f"  {t}: {type_binding_report[t]}")
+          print()
+          print("=== Total distinct types matched by the decl regex ===")
+          print(f"  {len(matched_type_names)}")
           PYEOF
 
-      - name: Dump param.f90 and TMultipoleData for diagnosis
+      - name: Verify chrg_parameter is now patched
         if: always()
         run: |
-          echo "================================================================"
-          echo "src/type/param.f90 — first 200 lines"
-          echo "================================================================"
-          sed -n '1,200p' src/type/param.f90 2>/dev/null || echo "(not found)"
+          echo "=== src/type/param.f90 around line 110-135 ==="
+          sed -n '110,135p' src/type/param.f90
           echo ""
-          echo "================================================================"
-          echo "Where is TMultipoleData defined?"
-          echo "================================================================"
-          grep -rn "TMultipoleData" src/ 2>/dev/null | head -n 20 || true
-          echo ""
-          echo "================================================================"
-          echo "Does any subclass override a TMultipoleData binding?"
-          echo "================================================================"
-          grep -rn "procedure.*::" src/type/param.f90 2>/dev/null || true
-          echo ""
-          echo "=== Any 'extends(TMultipoleData)' ==="
-          grep -rn "extends(TMultipoleData)" src/ 2>/dev/null || true
+          echo "=== Any remaining type-bound procedures WITHOUT non_overridable ==="
+          echo "(these are the ones Flang might still choke on)"
+          python3 - << 'PYEOF'
+          import re, os
+          ROOTS = ["src", "subprojects/mctc-lib/src"]
+          FORTRAN_EXTS = (".f90", ".F90", ".f", ".F", ".f95", ".F95")
+          found = 0
+          for root in ROOTS:
+              for dirpath, _, filenames in os.walk(root):
+                  for fn in filenames:
+                      if not fn.endswith(FORTRAN_EXTS):
+                          continue
+                      p = os.path.join(dirpath, fn)
+                      with open(p, "r", errors="replace") as fh:
+                          for i, line in enumerate(fh, 1):
+                              if re.match(r"^\s*procedure\b", line, re.IGNORECASE):
+                                  if "deferred" in line.lower():
+                                      continue
+                                  if "nopass" in line.lower():
+                                      continue
+                                  if "non_overridable" in line.lower():
+                                      continue
+                                  print(f"{p}:{i}: {line.rstrip()}")
+                                  found += 1
+          print(f"\nTotal unpatched: {found}")
+          PYEOF
 
       - name: Reconfigure build to pick up patches
         run: |
