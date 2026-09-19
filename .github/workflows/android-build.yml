@@ -17,14 +17,15 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install Meson and Ninja
-        run: pip install meson ninja
+      - name: Install Meson, Ninja, and CMake
+        run: pip install meson ninja cmake
 
       - name: Download Android NDK
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
           unzip -q android-ndk-r27c-linux.zip
           echo "ANDROID_NDK_HOME=$PWD/android-ndk-r27c" >> $GITHUB_ENV
+          echo "NDK_BIN=$PWD/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
 
       - name: Download Flang, LLVM, and aarch64 target
         run: |
@@ -49,19 +50,17 @@ jobs:
           ln -sf "$CLANG_DEV_LIB/x86_64-unknown-linux-gnu/libc++abi.so.1" runtime-libs/libc++abi.so
           ln -sf "$CLANG_DEV_LIB/libLLVM-21.so" runtime-libs/libLLVM.so
 
-          RUNTIME_LIBS="$PWD/runtime-libs"
           AARCH64_RUNTIME_LIB="$PWD/flang-aarch64/build-aarch64-install"
           cp -v "$AARCH64_RUNTIME_LIB"/libFortran*.a "$FLANG_LIB_DIR/"
 
           echo "FLANG_BIN=$FLANG_BIN" >> $GITHUB_ENV
           echo "FLANG_LIB_DIR=$FLANG_LIB_DIR" >> $GITHUB_ENV
-          echo "RUNTIME_LIBS=$RUNTIME_LIBS" >> $GITHUB_ENV
+          echo "RUNTIME_LIBS=$PWD/runtime-libs" >> $GITHUB_ENV
 
       - name: Build shim and Flang wrapper
         run: |
           NDK_TOOLCHAIN="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$NDK_TOOLCHAIN/sysroot"
-          NDK_BIN="$NDK_TOOLCHAIN/bin"
           ANDROID_LIB_DIR="$SYSROOT/usr/lib/aarch64-linux-android/21"
 
           cat > /tmp/fortran_shim.c << 'C'
@@ -72,15 +71,24 @@ jobs:
               return buf;
           }
           C
-          "$NDK_BIN/aarch64-linux-android21-clang" -c /tmp/fortran_shim.c -o /tmp/fortran_shim.o
+          "${{ env.NDK_BIN }}/aarch64-linux-android21-clang" -c /tmp/fortran_shim.c -o /tmp/fortran_shim.o
 
           cat > flang-wrapper.sh << EOF
           #!/bin/bash
           export LD_LIBRARY_PATH="${{ env.RUNTIME_LIBS }}:${{ env.FLANG_LIB_DIR }}:\$LD_LIBRARY_PATH"
-          export PATH="$NDK_BIN:\$PATH"
+          export PATH="${{ env.NDK_BIN }}:\$PATH"
+
+          # Strip -Werror=<name> args (Flang only supports bare -Werror)
+          FILTERED=()
+          for arg in "\$@"; do
+            case "\$arg" in
+              -Werror=*) ;;   # drop
+              *) FILTERED+=("\$arg") ;;
+            esac
+          done
 
           COMPILE_ONLY=0
-          for arg in "\$@"; do
+          for arg in "\${FILTERED[@]}"; do
             if [[ "\$arg" == "-c" || "\$arg" == "-E" || "\$arg" == "-S" ]]; then
               COMPILE_ONLY=1
               break
@@ -92,18 +100,18 @@ jobs:
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
-              "\$@"
+              "\${FILTERED[@]}"
           else
             exec "${{ env.FLANG_BIN }}" \\
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
               -resource-dir="$NDK_TOOLCHAIN/lib/clang/18" \\
-              -B"$NDK_BIN" \\
+              -B"${{ env.NDK_BIN }}" \\
               -fuse-ld=lld \\
               -L"$ANDROID_LIB_DIR" \\
               -Wl,--no-as-needed \\
               -Wl,--unresolved-symbols=ignore-in-object-files \\
-              "\$@" \\
+              "\${FILTERED[@]}" \\
               /tmp/fortran_shim.o \\
               -lc++_shared \\
               -lc -lm -ldl -llog \\
@@ -114,17 +122,46 @@ jobs:
           chmod +x flang-wrapper.sh
           echo "FLANG_WRAPPER=$PWD/flang-wrapper.sh" >> $GITHUB_ENV
 
+      - name: Build LAPACK for aarch64 Android
+        run: |
+          wget -q https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v3.12.0.tar.gz
+          tar xzf v3.12.0.tar.gz
+          cd lapack-3.12.0
+          mkdir build && cd build
+
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_SYSTEM_VERSION=21 \
+            -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+            -DCMAKE_ANDROID_NDK="${{ env.ANDROID_NDK_HOME }}" \
+            -DCMAKE_Fortran_COMPILER="${{ env.FLANG_WRAPPER }}" \
+            -DCMAKE_C_COMPILER="${{ env.NDK_BIN }}/aarch64-linux-android21-clang" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_TESTING=OFF \
+            -DLAPACKE=OFF \
+            -DCBLAS=OFF \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_Fortran_COMPILER_WORKS=1 \
+            -DCMAKE_C_COMPILER_WORKS=1 \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/lapack-install"
+
+          make -j$(nproc)
+          make install
+
+          echo ""
+          echo "=== LAPACK installed files ==="
+          find "$GITHUB_WORKSPACE/lapack-install" -type f -o -type l
+
       - name: Create Meson cross-file
         run: |
-          NDK_BIN="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-
           cat > android-arm64.ini << EOF
           [binaries]
-          c = '${NDK_BIN}/aarch64-linux-android21-clang'
-          cpp = '${NDK_BIN}/aarch64-linux-android21-clang++'
+          c = '${{ env.NDK_BIN }}/aarch64-linux-android21-clang'
+          cpp = '${{ env.NDK_BIN }}/aarch64-linux-android21-clang++'
           fortran = '${{ env.FLANG_WRAPPER }}'
-          ar = '${NDK_BIN}/llvm-ar'
-          strip = '${NDK_BIN}/llvm-strip'
+          ar = '${{ env.NDK_BIN }}/llvm-ar'
+          strip = '${{ env.NDK_BIN }}/llvm-strip'
 
           [host_machine]
           system = 'android'
@@ -141,9 +178,11 @@ jobs:
 
       - name: Configure build
         run: |
+          LAPACK_DIR="$GITHUB_WORKSPACE/lapack-install"
           meson setup builddir \
               --cross-file android-arm64.ini \
-              -Dlapack=netlib \
+              -Dlapack=custom \
+              -Dcustom_libraries="-L${LAPACK_DIR}/lib,lapack,blas" \
               -Dopenmp=false \
               -Dtblite=disabled \
               -Dcpcmx=disabled || {
