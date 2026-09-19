@@ -55,7 +55,6 @@ jobs:
 
           [built-in options]
           default_library = 'shared'
-          api = true
           EOF
 
       - name: Configure build
