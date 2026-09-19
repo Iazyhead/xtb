@@ -17,8 +17,11 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install Meson and Ninja
-        run: pip install meson ninja
+      - name: Install Meson, Ninja, and System libc++
+        run: |
+          pip install meson ninja
+          sudo apt-get update
+          sudo apt-get install -y libc++-dev libc++abi-dev || true
 
       - name: Download Android NDK
         run: |
@@ -44,29 +47,26 @@ jobs:
           LLVM_LIB=$(find $PWD/full-install -name 'libLLVM-21.so' | head -n 1)
           LLVM_LIB_DIR=$(dirname "$LLVM_LIB")
 
+          CLANG_DEV_LIB="$PWD/full-install/out/install/linux-x86/clang-dev/lib"
+
           echo "FLANG_BIN=$FLANG_BIN" >> $GITHUB_ENV
           echo "FLANG_LIB_DIR=$FLANG_LIB_DIR" >> $GITHUB_ENV
           echo "LLVM_LIB_DIR=$LLVM_LIB_DIR" >> $GITHUB_ENV
+          echo "CLANG_DEV_LIB=$CLANG_DEV_LIB" >> $GITHUB_ENV
 
-          echo "FLANG_BIN=$FLANG_BIN"
-          echo "FLANG_LIB_DIR=$FLANG_LIB_DIR"
-          echo "LLVM_LIB_DIR=$LLVM_LIB_DIR"
-
-          echo ""
-          echo "=== Contents of FLANG_LIB_DIR ==="
-          ls -la "$FLANG_LIB_DIR" 2>/dev/null | head -n 40
+          echo "=== Searching for libc++ everywhere ==="
+          find $PWD -name 'libc++*' 2>/dev/null | head -n 20
+          find /usr -name 'libc++.so*' 2>/dev/null | head -n 10
+          find /usr -name 'libc++abi.so*' 2>/dev/null | head -n 10
 
           echo ""
-          echo "=== All libFortran* in both packages ==="
-          find $PWD/flang-host $PWD/full-install -name 'libFortran*' 2>/dev/null
+          echo "=== Contents of clang-dev lib (filtered for c++) ==="
+          ls -la "$CLANG_DEV_LIB" 2>/dev/null | grep -i 'c++' || echo "(none)"
 
           echo ""
-          echo "=== All libclang_rt* in full-install ==="
-          find $PWD/full-install -name 'libclang_rt*' 2>/dev/null | head -n 30
-
-          echo ""
-          echo "=== Testing flang ==="
-          LD_LIBRARY_PATH="$LLVM_LIB_DIR:$FLANG_LIB_DIR:$LD_LIBRARY_PATH" "$FLANG_BIN" --version 2>&1 | head -n 5
+          echo "=== Testing flang with broad LD_LIBRARY_PATH ==="
+          LD_LIBRARY_PATH="$CLANG_DEV_LIB:$LLVM_LIB_DIR:$FLANG_LIB_DIR:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH" \
+            "$FLANG_BIN" --version 2>&1 | head -n 5
 
       - name: Create Flang wrapper
         run: |
@@ -75,7 +75,7 @@ jobs:
 
           cat > flang-wrapper.sh << EOF
           #!/bin/bash
-          export LD_LIBRARY_PATH="${{ env.LLVM_LIB_DIR }}:${{ env.FLANG_LIB_DIR }}:\$LD_LIBRARY_PATH"
+          export LD_LIBRARY_PATH="${{ env.CLANG_DEV_LIB }}:${{ env.LLVM_LIB_DIR }}:${{ env.FLANG_LIB_DIR }}:/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH"
           exec "${{ env.FLANG_BIN }}" \\
               --target=aarch64-linux-android21 \\
               --sysroot="$SYSROOT" \\
@@ -96,7 +96,7 @@ jobs:
             print *, "hello from fortran"
           end program hello
           FORT
-          ./flang-wrapper.sh -c /tmp/test.f90 -o /tmp/test.o 2>&1 | head -n 10
+          ./flang-wrapper.sh -c /tmp/test.f90 -o /tmp/test.o 2>&1 | head -n 20
           ls -la /tmp/test.o 2>&1
 
       - name: Create Meson cross-file
@@ -131,7 +131,7 @@ jobs:
               -Dlapack=custom \
               -Dcustom_libraries= \
               -Dopenmp=false \
-              -Dtblite=disabled \
+              -Dtible=disabled \
               -Dcpcmx=disabled
 
       - name: Build project
